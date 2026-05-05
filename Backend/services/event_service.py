@@ -10,6 +10,7 @@ from db import get_connection
 from services.device_service import (
     fetch_attendance_policy,
     find_employee_matches,
+    find_employee_by_card_id,
     parse_datetime_input,
     create_employee_from_device,
 )
@@ -97,7 +98,14 @@ def _combine(day: date, value: Optional[time], tzinfo=None):
     return datetime.combine(day, value).replace(tzinfo=tzinfo)
 
 
-def _compute_match(cur, employee_name: str):
+def _compute_match(cur, employee_name: str, card_id: Optional[str] = None):
+    # First try to match by card_id if available
+    if card_id:
+        card_match = find_employee_by_card_id(cur, card_id)
+        if card_match:
+            return str(card_match[0]), card_match[1], "matched"
+
+    # Fallback to name matching
     matches = find_employee_matches(cur, employee_name)
     if len(matches) == 1:
         return str(matches[0][0]), matches[0][1], "matched"
