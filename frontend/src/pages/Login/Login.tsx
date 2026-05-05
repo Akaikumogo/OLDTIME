@@ -50,15 +50,11 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center p-6">
       <Card className="w-full max-w-md border border-slate-200 shadow-sm dark:border-slate-800/70">
         <div className="mb-6">
-          <Text className="text-slate-500 dark:text-slate-400">
-            Backend bilan ishlovchi admin panel
-          </Text>
+      
           <Title level={2} className="!mb-1 !mt-2">
             Tizimga kirish
           </Title>
-          <Text className="text-slate-500 dark:text-slate-400">
-            Dashboard va keyingi CRUD modullarini ko‘rish uchun akkaunt bilan kiring.
-          </Text>
+          
         </div>
 
         {error ? <Alert type="error" showIcon className="mb-4" message={error} /> : null}
