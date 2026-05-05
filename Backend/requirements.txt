@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+psycopg2-binary
+bcrypt
+PyJWT
+requests
+python-dotenv

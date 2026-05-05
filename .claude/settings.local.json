@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://0.0.0.0:4000",
+    "ANTHROPIC_API_KEY": "AIzaSyBAVyQtSrBtMEHgKdbExdsPg20T03-LUKM"
+  },
+  "primaryModel": "gemini/gemini-1.5-flash-latest"
+}

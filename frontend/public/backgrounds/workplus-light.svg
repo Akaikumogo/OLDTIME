@@ -1,0 +1,35 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1920" y2="1080" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#EFF6FF"/>
+    </linearGradient>
+    <radialGradient id="blueGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(420 180) rotate(52) scale(420 580)">
+      <stop stop-color="#3B82F6" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="tealGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1510 260) rotate(122) scale(360 500)">
+      <stop stop-color="#14B8A6" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#14B8A6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="amberGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1220 860) rotate(20) scale(420 520)">
+      <stop stop-color="#F59E0B" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" x="-100" y="-100" width="2120" height="1280" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="48"/>
+    </filter>
+    <pattern id="grid" width="96" height="96" patternUnits="userSpaceOnUse">
+      <path d="M 96 0 H 0 V 96" stroke="#94A3B8" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <g filter="url(#blur)">
+    <circle cx="420" cy="180" r="240" fill="url(#blueGlow)"/>
+    <circle cx="1510" cy="260" r="220" fill="url(#tealGlow)"/>
+    <circle cx="1220" cy="860" r="250" fill="url(#amberGlow)"/>
+  </g>
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  <path d="M -40 820 C 300 740, 500 920, 820 840 C 1150 760, 1390 620, 1960 700" stroke="#2563EB" stroke-opacity="0.08" stroke-width="4"/>
+  <path d="M -40 720 C 250 640, 470 780, 780 710 C 1090 640, 1380 510, 1960 560" stroke="#0F766E" stroke-opacity="0.08" stroke-width="3"/>
+</svg>

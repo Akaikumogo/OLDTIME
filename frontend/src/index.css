@@ -1,0 +1,227 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+@tailwind utilities;
+@custom-variant dark (&:where(.dark, .dark *));
+.glass {
+  /* From https://css.glass */
+  background: rgba(255, 255, 255, 0.24);
+  border-radius: 16px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(2.7px);
+  -webkit-backdrop-filter: blur(2.7px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+:root {
+  --bg-main: #f8fafc;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --border-color: #e2e8f0;
+  --primary: #2563eb;
+  --primary-hover: #0a36ad;
+  --page-bg-image: url('/backgrounds/workplus-light.svg');
+}
+
+.dark {
+  --bg-main: #020617;
+  --bg-card: #0f172a;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --border-color: #1e293b;
+  --primary: #3b82f6;
+  --primary-hover: #60a5fa;
+  --page-bg-image: url('/backgrounds/workplus-dark.svg');
+}
+body {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  min-height: 100vh;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-main);
+  background-image:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.82), rgba(248, 250, 252, 0.92)),
+    var(--page-bg-image);
+  background-repeat: no-repeat, no-repeat;
+  background-size: cover, cover;
+  background-position: center, center;
+  background-attachment: fixed, fixed;
+  color: var(--text-primary);
+}
+
+.dark body {
+  background-image:
+    linear-gradient(180deg, rgba(2, 6, 23, 0.72), rgba(15, 23, 42, 0.88)),
+    var(--page-bg-image);
+}
+
+.ant-card {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border: 1px solid rgba(148, 163, 184, 0.24) !important;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px) saturate(165%);
+  -webkit-backdrop-filter: blur(18px) saturate(165%);
+  overflow: hidden;
+}
+
+.dark .ant-card {
+  background: rgba(15, 23, 42, 0.68) !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  box-shadow: 0 20px 50px rgba(2, 6, 23, 0.38);
+}
+
+.ant-card .ant-card-head,
+.ant-card .ant-card-body {
+  background: transparent;
+}
+
+.ant-card .ant-card-head {
+  border-bottom-color: rgba(148, 163, 184, 0.18);
+}
+
+.dark .ant-card .ant-card-head {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px) saturate(165%);
+  -webkit-backdrop-filter: blur(18px) saturate(165%);
+}
+
+.dark .glass-panel {
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 20px 50px rgba(2, 6, 23, 0.34);
+}
+
+@layer base {
+  /* Global Mac Style Scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  *::-webkit-scrollbar-track {
+    @apply bg-transparent rounded-full;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    @apply bg-black/20 rounded-full transition-all duration-300 ease-in-out;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    @apply bg-black/40;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:active {
+    @apply bg-black/60;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-corner {
+    @apply bg-transparent;
+  }
+
+  /* Dark mode */
+  .dark * {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+
+  .dark *::-webkit-scrollbar-thumb {
+    @apply bg-white/20;
+    background-clip: content-box;
+  }
+
+  .dark *::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/40;
+    background-clip: content-box;
+  }
+
+  .dark *::-webkit-scrollbar-thumb:active {
+    @apply bg-white/60;
+    background-clip: content-box;
+  }
+
+  /* Main scrollbar with theme color */
+  html,
+  body {
+    scrollbar-color: rgba(37, 99, 235, 0.35) transparent;
+  }
+
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    @apply w-2.5 h-2.5;
+  }
+
+  html::-webkit-scrollbar-thumb,
+  body::-webkit-scrollbar-thumb {
+    background: rgba(37, 99, 235, 0.35);
+    @apply rounded-full;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  html::-webkit-scrollbar-thumb:hover,
+  body::-webkit-scrollbar-thumb:hover {
+    background: rgba(37, 99, 235, 0.55);
+    background-clip: content-box;
+  }
+
+  /* Smooth scrolling */
+  * {
+    scroll-behavior: smooth;
+  }
+
+  /* Auto-hide effect */
+  *::-webkit-scrollbar-thumb {
+    @apply opacity-70 transition-opacity duration-300;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    @apply opacity-100;
+  }
+
+  /* Mobile responsive */
+  @media (max-width: 768px) {
+    *::-webkit-scrollbar {
+      @apply w-1.5 h-1.5;
+    }
+
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar {
+      @apply w-2 h-2;
+    }
+  }
+
+  @media (max-width: 480px) {
+    *::-webkit-scrollbar {
+      @apply w-1 h-1;
+    }
+
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar {
+      @apply w-1.5 h-1.5;
+    }
+  }
+}
