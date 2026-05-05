@@ -8,6 +8,7 @@ import {
   Briefcase,
   Building2,
   CalendarDays,
+  Clock,
   ClipboardList,
   DoorOpen,
   FileText,
@@ -81,6 +82,15 @@ const navItems: {
       ru: 'Attendance Events'
     },
     icon: CalendarDays
+  },
+  {
+    path: '/attendance-policy',
+    label: {
+      uz: 'Time Management',
+      en: 'Time Management',
+      ru: 'Управление временем'
+    },
+    icon: Clock
   },
   {
     path: '/daily-attendance',

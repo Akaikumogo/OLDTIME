@@ -3,7 +3,7 @@ import { Alert, Button, Card, Form, Input, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import apiService from '@/services/api';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 type LoginForm = {
   username: string;
@@ -50,16 +50,20 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center p-6">
       <Card className="w-full max-w-md border border-slate-200 shadow-sm dark:border-slate-800/70">
         <div className="mb-6">
-      
           <Title level={2} className="!mb-1 !mt-2">
             Tizimga kirish
           </Title>
-          
         </div>
 
-        {error ? <Alert type="error" showIcon className="mb-4" message={error} /> : null}
+        {error ? (
+          <Alert type="error" showIcon className="mb-4" message={error} />
+        ) : null}
 
-        <Form<LoginForm> layout="vertical" onFinish={handleSubmit} autoComplete="off">
+        <Form<LoginForm>
+          layout="vertical"
+          onFinish={handleSubmit}
+          autoComplete="off"
+        >
           <Form.Item
             label="Login"
             name="username"
@@ -76,7 +80,13 @@ export default function LoginPage() {
             <Input.Password placeholder="••••••••" size="large" />
           </Form.Item>
 
-          <Button type="primary" htmlType="submit" block size="large" loading={submitting}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            block
+            size="large"
+            loading={submitting}
+          >
             Kirish
           </Button>
         </Form>

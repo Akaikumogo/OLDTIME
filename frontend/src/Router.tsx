@@ -13,10 +13,13 @@ import DashboardLayout from './Layout/Layout';
 import AnimateWrapper from './components/AnimateWrapper';
 
 const LoginPage = lazy(() => import('./pages/Login/Login'));
-const Home = lazy(() => import("./pages/Home"));
+const Home = lazy(() => import('./pages/Home'));
 const Employees = lazy(() => import('./pages/Employees'));
 const Departments = lazy(() => import('./pages/Departments'));
 const AttendanceEvents = lazy(() => import('./pages/AttendanceEvents'));
+const AttendancePolicy = lazy(
+  () => import('./pages/AttendancePolicy/AttendancePolicy')
+);
 const Reports = lazy(() => import('./pages/Reports'));
 const WorkPermissions = lazy(() => import('./pages/WorkPermissions'));
 const DailyAttendance = lazy(() => import('./pages/DailyAttendance'));
@@ -62,6 +65,10 @@ export const routes: RouteObject[] = [
           {
             path: 'attendance-events',
             element: withSuspense(AttendanceEvents)
+          },
+          {
+            path: 'attendance-policy',
+            element: withSuspense(AttendancePolicy)
           },
           {
             path: 'reports',

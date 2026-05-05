@@ -2,8 +2,10 @@ import axios, { type AxiosInstance } from 'axios';
 import { notification } from 'antd';
 
 const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/+$/, '') ||
-  'http://localhost:8000';
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
+    /\/+$/,
+    ''
+  ) || 'http://localhost:8000';
 
 export const BACKEND_ORIGIN = new URL(API_BASE_URL).origin;
 
@@ -155,7 +157,8 @@ export type AttendanceEvent = {
   created_at: string;
   employee_id: string | null;
   employee_name: string | null;
-  employee: { full_name: string } | null;  door: { id: string; name: string; ip_address: string; event_type: string };
+  employee: { full_name: string } | null;
+  door: { id: string; name: string; ip_address: string; event_type: string };
 };
 export type AttendanceEventEnvelope = {
   message: string;
@@ -688,8 +691,8 @@ class ApiService {
   async upsertAttendancePolicy(body: {
     work_start_time: string;
     work_end_time: string;
-    lunch_start_time: string;
-    lunch_end_time: string;
+    lunch_start_time: string | null;
+    lunch_end_time: string | null;
     late_grace_minutes: number;
     early_leave_grace_minutes: number;
     is_active: boolean;
