@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Result } from 'antd';
+import { Alert, Button, Empty, Result, Table, Tag } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import {
   Clock3,
   LogIn,
@@ -22,6 +23,13 @@ import { useEmployeeTimeline } from '@/hooks/useEmployeeTimeline';
 import { formatDisplayDate } from '@/utils/date';
 import { secondsToHuman } from '@/utils/time';
 
+type LateOccurrence = {
+  id: string;
+  employeeName: string;
+  date: string;
+  time: string;
+};
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return 'Dashboard maʼlumotlarini yuklashda xato yuz berdi';
@@ -35,6 +43,44 @@ const Home = () => {
   const timeline = useEmployeeTimeline(selectedRow?.employee.id ?? null, dateFrom);
 
   const data = dashboard.data;
+  const lateOccurrences: LateOccurrence[] =
+    data?.dailyRows
+      .filter((row) => row.statuses.includes('late'))
+      .map((row) => {
+        const lateMarker = row.markers.find((marker) => marker.status === 'late');
+        return {
+          id: `${row.employee.id}-${row.date}-${lateMarker?.full_time || row.first_entry_full || row.first_entry || ''}`,
+          employeeName: row.employee.full_name,
+          date: row.date,
+          time: lateMarker?.time || row.first_entry || '-'
+        };
+      }) ?? [];
+
+  const lateColumns: ColumnsType<LateOccurrence> = [
+    {
+      title: 'Xodim',
+      dataIndex: 'employeeName',
+      render: (name: string) => (
+        <span className="font-medium text-slate-900 dark:text-white">{name}</span>
+      )
+    },
+    {
+      title: 'Sana',
+      dataIndex: 'date',
+      width: 140,
+      render: (date: string) => formatDisplayDate(date)
+    },
+    {
+      title: 'Kelgan vaqti',
+      dataIndex: 'time',
+      width: 140
+    },
+    {
+      title: 'Holat',
+      width: 110,
+      render: () => <Tag color="red">Kechikdi</Tag>
+    }
+  ];
   const isEmpty =
     !dashboard.isLoading &&
     !dashboard.error &&
@@ -140,6 +186,36 @@ const Home = () => {
           <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
             <DashboardChart data={data.attendanceChart} />
             <TopAppsCard apps={data.topApps} />
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950">
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-semibold text-slate-950 dark:text-white">
+                  Kechikkanlar
+                </h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Tanlangan davrda har bir kechikish alohida qator.
+                </p>
+              </div>
+              <Tag color={lateOccurrences.length ? 'red' : 'green'}>
+                {lateOccurrences.length} ta
+              </Tag>
+            </div>
+            <Table
+              rowKey="id"
+              size="middle"
+              columns={lateColumns}
+              dataSource={lateOccurrences}
+              pagination={{ pageSize: 8, hideOnSinglePage: true }}
+              locale={{
+                emptyText: (
+                  <div className="flex min-h-[180px] items-center justify-center">
+                    <Empty description="Bu davrda kechikish topilmadi" />
+                  </div>
+                )
+              }}
+            />
           </div>
 
           <DailyAttendanceTable

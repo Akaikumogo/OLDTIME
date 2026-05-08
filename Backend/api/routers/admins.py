@@ -1,5 +1,6 @@
 import hmac
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -26,6 +27,34 @@ from utils.security import (
 )
 
 router = APIRouter(tags=["Admins"])
+
+ADMIN_ROLES = {"superadmin", "admin", "hr", "manager"}
+
+
+def _require_superadmin(user):
+    if user.get("role") != "superadmin":
+        raise HTTPException(status_code=403, detail="Superadmin only")
+
+
+def _latest_file_info(directory: str | None):
+    if not directory:
+        return {"configured": False, "exists": False, "latest_file": None}
+    path = Path(directory)
+    if not path.exists() or not path.is_dir():
+        return {"configured": True, "exists": False, "path": str(path), "latest_file": None}
+    files = [item for item in path.iterdir() if item.is_file()]
+    latest = max(files, key=lambda item: item.stat().st_mtime, default=None)
+    return {
+        "configured": True,
+        "exists": True,
+        "path": str(path),
+        "file_count": len(files),
+        "latest_file": {
+            "name": latest.name,
+            "size_bytes": latest.stat().st_size,
+            "modified_at": latest.stat().st_mtime,
+        } if latest else None,
+    }
 
 
 @router.get(
@@ -112,8 +141,10 @@ def create_admin(data: AdminCreate, user=Depends(optional_verify_token)):
             cur.execute("SELECT COUNT(*) FROM admins")
             admin_count = cur.fetchone()[0]
 
-            if admin_count > 0 and (not user or user.get("role") != "admin"):
+            if admin_count > 0 and (not user or user.get("role") != "superadmin"):
                 raise HTTPException(status_code=403, detail="Forbidden")
+            if data.role not in ADMIN_ROLES:
+                raise HTTPException(status_code=400, detail="Invalid role")
 
             cur.execute(
                 "SELECT 1 FROM admins WHERE username = %s OR email = %s",
@@ -128,11 +159,11 @@ def create_admin(data: AdminCreate, user=Depends(optional_verify_token)):
             hashed = hash_password(data.password)
             cur.execute(
                 """
-                INSERT INTO admins (full_name, username, email, password_hash)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO admins (full_name, username, email, password_hash, role)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id, full_name, username, email, role, is_active, created_at
                 """,
-                (data.full_name, data.username, data.email, hashed),
+                (data.full_name, data.username, data.email, hashed, data.role),
             )
             created_admin = cur.fetchone()
             conn.commit()
@@ -160,6 +191,9 @@ def update_admin(admin_id: str, data: AdminUpdate, user=Depends(require_role(["a
         update_fields.append("email = %s")
         values.append(data.email)
     if data.role is not None:
+        _require_superadmin(user)
+        if data.role not in ADMIN_ROLES:
+            raise HTTPException(status_code=400, detail="Invalid role")
         update_fields.append("role = %s")
         values.append(data.role)
     if data.is_active is not None:
@@ -229,6 +263,21 @@ def delete_admin(admin_id: str, user=Depends(require_role(["admin"]))):
         raise HTTPException(status_code=404, detail="Admin not found")
 
     return {"message": "admin deleted"}
+
+
+@router.get(
+    "/system/operations-status",
+    summary="Backup and log monitoring status",
+)
+def operations_status(user=Depends(require_role(["superadmin"]))):
+    return {
+        "backup": _latest_file_info(os.getenv("BACKUP_DIR")),
+        "logs": _latest_file_info(os.getenv("LOG_DIR")),
+        "database": {
+            "backup_dir_env": bool(os.getenv("BACKUP_DIR")),
+            "log_dir_env": bool(os.getenv("LOG_DIR")),
+        },
+    }
 
 
 @router.post(

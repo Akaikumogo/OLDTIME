@@ -29,8 +29,10 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import apiService, { BACKEND_ORIGIN, type Employee } from '@/services/api';
 import { formatDisplayDate } from '@/utils/date';
+import { canWrite } from '@/utils/can';
 
 type EmployeeFormValues = {
   full_name: string;
@@ -59,6 +61,8 @@ const Employees = () => {
   const [photoFile, setPhotoFile] = useState<UploadFile | null>(null);
   const [form] = Form.useForm<EmployeeFormValues>();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const writable = canWrite();
 
   const { data: departments } = useQuery({
     queryKey: ['departments'],
@@ -250,12 +254,18 @@ const Employees = () => {
       dataIndex: 'full_name',
       sorter: (a, b) => a.full_name.localeCompare(b.full_name),
       render: (name: string, record) => (
-        <div>
-          <div className="font-medium text-slate-900 dark:text-white">{name}</div>
+        <button
+          type="button"
+          onClick={() => navigate(`/employees/${record.id}`)}
+          className="block text-left"
+        >
+          <div className="font-medium text-slate-900 hover:text-blue-600 dark:text-white">
+            {name}
+          </div>
           {record.employee_code ? (
             <div className="text-xs text-slate-500">#{record.employee_code}</div>
           ) : null}
-        </div>
+        </button>
       )
     },
     {
@@ -303,25 +313,37 @@ const Employees = () => {
       width: 110,
       render: (_, record) => (
         <div className="flex gap-1">
-          <Tooltip title="Tahrirlash">
+          <Tooltip title="Profil">
             <Button
               type="text"
               size="small"
-              icon={<Edit size={16} />}
-              onClick={() => handleEdit(record)}
+              icon={<UserCircle2 size={16} />}
+              onClick={() => navigate(`/employees/${record.id}`)}
             />
           </Tooltip>
-          <Popconfirm
-            title="Xodimni deaktiv qilmoqchimisiz?"
-            description="Ma'lumotlar saqlanib qoladi, faqat is_active=false bo'ladi."
-            onConfirm={() => deleteMutation.mutate(record.id)}
-            okText="Ha"
-            cancelText="Yo'q"
-          >
-            <Tooltip title="Deaktiv qilish">
-              <Button type="text" size="small" danger icon={<Trash2 size={16} />} />
-            </Tooltip>
-          </Popconfirm>
+          {writable ? (
+            <>
+              <Tooltip title="Tahrirlash">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<Edit size={16} />}
+                  onClick={() => handleEdit(record)}
+                />
+              </Tooltip>
+              <Popconfirm
+                title="Xodimni deaktiv qilmoqchimisiz?"
+                description="Ma'lumotlar saqlanib qoladi, faqat is_active=false bo'ladi."
+                onConfirm={() => deleteMutation.mutate(record.id)}
+                okText="Ha"
+                cancelText="Yo'q"
+              >
+                <Tooltip title="Deaktiv qilish">
+                  <Button type="text" size="small" danger icon={<Trash2 size={16} />} />
+                </Tooltip>
+              </Popconfirm>
+            </>
+          ) : null}
         </div>
       )
     }
@@ -393,9 +415,11 @@ const Employees = () => {
           >
             Yangilash
           </Button>
-          <Button type="primary" icon={<Plus size={16} />} onClick={handleOpenCreate}>
-            Qo'shish
-          </Button>
+          {writable ? (
+            <Button type="primary" icon={<Plus size={16} />} onClick={handleOpenCreate}>
+              Qo'shish
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -421,6 +445,9 @@ const Employees = () => {
           }}
           scroll={{ x: 1100 }}
           locale={{ emptyText: <Empty description="Xodimlar topilmadi" /> }}
+          onRow={(record) => ({
+            onDoubleClick: () => navigate(`/employees/${record.id}`)
+          })}
         />
       </motion.div>
 

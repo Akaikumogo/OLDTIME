@@ -13,15 +13,17 @@ from __future__ import annotations
 import json
 import os
 import platform
+import signal
 import socket
 import subprocess
 import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 from urllib import request
 from urllib.error import URLError
 
@@ -33,8 +35,11 @@ POLL_SECONDS = int(os.getenv("WORKPLUS_POLL_SECONDS", "5"))
 FLUSH_SECONDS = int(os.getenv("WORKPLUS_FLUSH_SECONDS", "30"))
 HEARTBEAT_SECONDS = int(os.getenv("WORKPLUS_HEARTBEAT_SECONDS", "60"))
 COLLECT_URLS = os.getenv("WORKPLUS_COLLECT_URLS", "false").lower() == "true"
-QUEUE_FILE = Path(os.getenv("WORKPLUS_QUEUE_FILE", "workplus_agent_queue.jsonl"))
 MAX_QUEUE_EVENTS = int(os.getenv("WORKPLUS_MAX_QUEUE_EVENTS", "5000"))
+APP_DIR_ENV = os.getenv("WORKPLUS_APP_DIR")
+QUEUE_FILE_ENV = os.getenv("WORKPLUS_QUEUE_FILE")
+DEVICE_ID_FILE_ENV = os.getenv("WORKPLUS_DEVICE_ID_FILE")
+STOP_REQUESTED = False
 
 
 @dataclass
@@ -47,8 +52,46 @@ class ActivityEvent:
     duration_seconds: int
 
 
+def request_stop(signum, frame) -> None:
+    del signum, frame
+    global STOP_REQUESTED
+    STOP_REQUESTED = True
+
+
 def now_iso() -> str:
-    return datetime.now().replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def get_app_dir() -> Path:
+    if APP_DIR_ENV:
+        path = Path(APP_DIR_ENV)
+    elif platform.system() == "Windows":
+        path = Path(os.getenv("PROGRAMDATA", str(Path.home()))) / "WorkPlus"
+    elif platform.system() == "Darwin":
+        path = Path.home() / "Library" / "Application Support" / "WorkPlus"
+    else:
+        path = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "workplus"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+APP_DIR = get_app_dir()
+QUEUE_FILE = Path(QUEUE_FILE_ENV) if QUEUE_FILE_ENV else APP_DIR / "activity_queue.jsonl"
+DEVICE_ID_FILE = Path(DEVICE_ID_FILE_ENV) if DEVICE_ID_FILE_ENV else APP_DIR / "device_id"
+
+
+def get_device_id() -> str:
+    try:
+        if DEVICE_ID_FILE.exists():
+            value = DEVICE_ID_FILE.read_text(encoding="utf-8").strip()
+            if 8 <= len(value) <= 64:
+                return value
+        value = uuid.uuid4().hex
+        DEVICE_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DEVICE_ID_FILE.write_text(value + "\n", encoding="utf-8")
+        return value
+    except OSError:
+        return uuid.uuid5(uuid.NAMESPACE_DNS, f"{socket.gethostname()}-{get_mac_address()}").hex
 
 
 def get_mac_address() -> str:
@@ -86,6 +129,7 @@ def heartbeat() -> None:
     post_json(
         "/internal/computers/heartbeat",
         {
+            "device_id": get_device_id(),
             "hostname": socket.gethostname(),
             "mac_address": get_mac_address(),
             "ip_address": get_ip_address(),
@@ -133,7 +177,17 @@ def browser_url_macos(app_name: str) -> Optional[str]:
     if not script:
         return None
     url = run_command(["osascript", "-e", script])
-    return url or None
+    return sanitize_url(url)
+
+
+def sanitize_url(url: str | None) -> Optional[str]:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return None
+    scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
+    return f"{scheme}://{parsed.netloc.lower().removeprefix('www.')}"
 
 
 def active_window_windows() -> tuple[str, str]:
@@ -174,6 +228,7 @@ def get_active_context() -> tuple[str, str, Optional[str]]:
 def append_queue(event: ActivityEvent) -> None:
     if event.duration_seconds <= 0:
         return
+    QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with QUEUE_FILE.open("a", encoding="utf-8") as file:
         file.write(json.dumps(asdict(event), ensure_ascii=False) + "\n")
     trim_queue()
@@ -186,18 +241,52 @@ def read_queue() -> list[dict]:
     with QUEUE_FILE.open("r", encoding="utf-8") as file:
         for line in file:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                print(f"Agent queue warning: skipped corrupt row ({exc})", file=sys.stderr)
     return rows
+
+
+def write_queue(rows: list[dict]) -> None:
+    QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = QUEUE_FILE.with_suffix(QUEUE_FILE.suffix + ".tmp")
+    with tmp_file.open("w", encoding="utf-8") as file:
+        for row in rows:
+            file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    tmp_file.replace(QUEUE_FILE)
+
+
+def record_context_event(
+    context: tuple[str, str, Optional[str]] | None,
+    started_at: str,
+    ended_at: str,
+) -> bool:
+    if context is None:
+        return False
+    started_dt = datetime.fromisoformat(started_at)
+    ended_dt = datetime.fromisoformat(ended_at)
+    duration = max(int((ended_dt - started_dt).total_seconds()), 0)
+    append_queue(
+        ActivityEvent(
+            app_name=context[0],
+            window_title=context[1],
+            url=context[2],
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_seconds=duration,
+        )
+    )
+    return duration > 0
 
 
 def trim_queue() -> None:
     rows = read_queue()
     if len(rows) <= MAX_QUEUE_EVENTS:
         return
-    with QUEUE_FILE.open("w", encoding="utf-8") as file:
-        for row in rows[-MAX_QUEUE_EVENTS:]:
-            file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_queue(rows[-MAX_QUEUE_EVENTS:])
 
 
 def clear_queue() -> None:
@@ -212,6 +301,7 @@ def flush_queue() -> None:
     post_json(
         "/internal/computer-activity/events",
         {
+            "device_id": get_device_id(),
             "mac_address": get_mac_address(),
             "employee_id": EMPLOYEE_ID,
             "events": events,
@@ -221,12 +311,19 @@ def flush_queue() -> None:
 
 
 def main() -> int:
+    global STOP_REQUESTED
     if not AGENT_TOKEN or len(AGENT_TOKEN.encode("utf-8")) < 32:
         print("WORKPLUS_AGENT_TOKEN must be configured and at least 32 bytes", file=sys.stderr)
         return 2
 
+    signal.signal(signal.SIGINT, request_stop)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, request_stop)
+
     print("WorkPlus desktop agent started")
     print(f"Backend: {BACKEND_URL}")
+    print(f"Device ID: {get_device_id()}")
+    print(f"Data directory: {APP_DIR}")
     print("URL collection:", "enabled" if COLLECT_URLS else "disabled")
 
     last_context = None
@@ -234,7 +331,7 @@ def main() -> int:
     last_flush = time.time()
     last_heartbeat = 0.0
 
-    while True:
+    while not STOP_REQUESTED:
         try:
             current_monotonic = time.time()
             if current_monotonic - last_heartbeat >= HEARTBEAT_SECONDS:
@@ -249,35 +346,33 @@ def main() -> int:
                 last_context = context
                 started_at = current_time
             elif context != last_context:
-                started_dt = datetime.fromisoformat(started_at)
-                ended_dt = datetime.fromisoformat(current_time)
-                duration = max(int((ended_dt - started_dt).total_seconds()), 0)
-                append_queue(
-                    ActivityEvent(
-                        app_name=last_context[0],
-                        window_title=last_context[1],
-                        url=last_context[2],
-                        started_at=started_at,
-                        ended_at=current_time,
-                        duration_seconds=duration,
-                    )
-                )
+                record_context_event(last_context, started_at, current_time)
                 last_context = context
                 started_at = current_time
 
             if current_monotonic - last_flush >= FLUSH_SECONDS:
+                if record_context_event(last_context, started_at, current_time):
+                    started_at = current_time
                 flush_queue()
                 last_flush = current_monotonic
         except (URLError, TimeoutError, OSError) as exc:
             print(f"Agent network/system warning: {exc}", file=sys.stderr)
         except KeyboardInterrupt:
-            flush_queue()
-            print("WorkPlus desktop agent stopped")
-            return 0
+            STOP_REQUESTED = True
         except Exception as exc:
             print(f"Agent warning: {exc}", file=sys.stderr)
 
+        if STOP_REQUESTED:
+            break
         time.sleep(POLL_SECONDS)
+
+    record_context_event(last_context, started_at, now_iso())
+    try:
+        flush_queue()
+    except Exception as exc:
+        print(f"Agent shutdown warning: queued activity was kept locally ({exc})", file=sys.stderr)
+    print("WorkPlus desktop agent stopped")
+    return 0
 
 
 if __name__ == "__main__":

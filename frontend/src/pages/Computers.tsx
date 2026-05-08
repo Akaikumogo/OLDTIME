@@ -5,8 +5,26 @@ import { Plus, RefreshCw, Edit, Trash2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiService from '@/services/api';
-import type { Computer } from '@/services/api';
-import { formatDisplayDate } from '@/utils/date';
+import type { Computer, Employee } from '@/services/api';
+import { formatDateTime, formatDisplayDate } from '@/utils/date';
+import { canWrite } from '@/utils/can';
+
+type ComputerFormValues = {
+  device_id?: string | null;
+  hostname: string;
+  ip_address?: string | null;
+  mac_address: string;
+  os_name?: string | null;
+  agent_version?: string | null;
+  employee_id?: string | null;
+  is_active: boolean;
+};
+
+const connectionColor: Record<string, string> = {
+  online: 'green',
+  offline: 'red',
+  unknown: 'default'
+};
 
 const Computers = () => {
   const [page, setPage] = useState(1);
@@ -15,6 +33,7 @@ const Computers = () => {
   const [editingComputer, setEditingComputer] = useState<Computer | null>(null);
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
+  const writable = canWrite();
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['computers', page, limit],
@@ -25,9 +44,20 @@ const Computers = () => {
       })
   });
 
+  const { data: employees } = useQuery({
+    queryKey: ['employees-for-computers'],
+    queryFn: () =>
+      apiService.listEmployees({
+        page: 1,
+        limit: 100,
+        is_active: true,
+        sort: 'name',
+        order: 'asc'
+      })
+  });
+
   const createMutation = useMutation({
-    mutationFn: (values: any) =>
-      apiService.createComputer(values),
+    mutationFn: (values: ComputerFormValues) => apiService.createComputer(values),
     onSuccess: () => {
       message.success('Kompyuter muvaffaqiyatli qo\'shildi');
       setIsModalOpen(false);
@@ -40,7 +70,7 @@ const Computers = () => {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, values }: { id: string; values: any }) =>
+    mutationFn: ({ id, values }: { id: string; values: Partial<ComputerFormValues> }) =>
       apiService.updateComputer(id, values),
     onSuccess: () => {
       message.success('Kompyuter muvaffaqiyatli yangilandi');
@@ -89,10 +119,14 @@ const Computers = () => {
   const handleEdit = (computer: Computer) => {
     setEditingComputer(computer);
     form.setFieldsValue({
+      device_id: computer.device_id,
       hostname: computer.hostname,
       ip_address: computer.ip_address,
       mac_address: computer.mac_address,
-      is_active: true
+      os_name: computer.os_name,
+      agent_version: computer.agent_version,
+      employee_id: computer.employee?.id ?? null,
+      is_active: computer.is_active
     });
     setIsModalOpen(true);
   };
@@ -115,9 +149,21 @@ const Computers = () => {
       render: (id: string) => <span className="font-mono text-xs">{id.slice(0, 8)}...</span>
     },
     {
+      title: 'Device ID',
+      dataIndex: 'device_id',
+      width: 120,
+      render: (id: string | null) => id ? <span className="font-mono text-xs">{id.slice(0, 12)}...</span> : '-'
+    },
+    {
       title: 'Nomi',
       dataIndex: 'hostname',
       sorter: true
+    },
+    {
+      title: 'Xodim',
+      dataIndex: ['employee', 'full_name'],
+      width: 180,
+      render: (name: string | undefined) => name || '-'
     },
     {
       title: 'IP manzil',
@@ -130,7 +176,30 @@ const Computers = () => {
       width: 150
     },
     {
-      title: 'Holat',
+      title: 'OS',
+      dataIndex: 'os_name',
+      width: 150,
+      ellipsis: true,
+      render: (value: string | null) => value || '-'
+    },
+    {
+      title: 'Agent',
+      dataIndex: 'agent_version',
+      width: 100,
+      render: (value: string | null) => value || '-'
+    },
+    {
+      title: 'Ulanish',
+      dataIndex: 'connection_status',
+      width: 110,
+      render: (status: string = 'unknown') => (
+        <Tag color={connectionColor[status] ?? 'default'}>
+          {status === 'online' ? 'Online' : status === 'offline' ? 'Offline' : 'Noma\'lum'}
+        </Tag>
+      )
+    },
+    {
+      title: 'Aktiv',
       dataIndex: 'is_active',
       width: 100,
       render: (isActive: boolean) => (
@@ -138,6 +207,12 @@ const Computers = () => {
           {isActive ? 'Aktiv' : 'Noaktiv'}
         </Tag>
       )
+    },
+    {
+      title: 'Oxirgi signal',
+      dataIndex: 'last_seen_at',
+      width: 170,
+      render: (date: string | null) => date ? formatDateTime(date) : '-'
     },
     {
       title: 'Yaratilgan',
@@ -151,25 +226,29 @@ const Computers = () => {
       width: 120,
       render: (_, record: Computer) => (
         <div className="flex gap-2">
-          <Button
-            type="text"
-            size="small"
-            icon={<Edit size={16} />}
-            onClick={() => handleEdit(record)}
-          />
-          <Popconfirm
-            title="Kompyuterni o'chirmoqchimisiz?"
-            onConfirm={() => handleDelete(record.id)}
-            okText="Ha"
-            cancelText="Yo'q"
-          >
-            <Button
-              type="text"
-              size="small"
-              danger
-              icon={<Trash2 size={16} />}
-            />
-          </Popconfirm>
+          {writable ? (
+            <>
+              <Button
+                type="text"
+                size="small"
+                icon={<Edit size={16} />}
+                onClick={() => handleEdit(record)}
+              />
+              <Popconfirm
+                title="Kompyuterni o'chirmoqchimisiz?"
+                onConfirm={() => handleDelete(record.id)}
+                okText="Ha"
+                cancelText="Yo'q"
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<Trash2 size={16} />}
+                />
+              </Popconfirm>
+            </>
+          ) : null}
         </div>
       )
     }
@@ -195,9 +274,11 @@ const Computers = () => {
           >
             Yangilash
           </Button>
-          <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>
-            Qo'shish
-          </Button>
+          {writable ? (
+            <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>
+              Qo'shish
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -221,7 +302,7 @@ const Computers = () => {
               setLimit(newLimit);
             }
           }}
-          scroll={{ x: 900 }}
+          scroll={{ x: 1420 }}
           locale={{ emptyText: <Empty description="Kompyuterlar topilmadi" /> }}
         />
       </motion.div>
@@ -245,6 +326,9 @@ const Computers = () => {
         ]}
       >
         <Form form={form} layout="vertical">
+          <Form.Item name="device_id" label="Device ID">
+            <Input placeholder="Agent avtomatik yaratadi" />
+          </Form.Item>
           <Form.Item
             name="hostname"
             label="Nomi"
@@ -255,8 +339,32 @@ const Computers = () => {
           <Form.Item name="ip_address" label="IP manzil">
             <Input placeholder="192.168.1.1" />
           </Form.Item>
-          <Form.Item name="mac_address" label="MAC manzil">
+          <Form.Item
+            name="mac_address"
+            label="MAC manzil"
+            rules={[{ required: true, message: 'MAC manzilni kiriting' }]}
+          >
             <Input placeholder="00:1A:2B:3C:4D:5E" />
+          </Form.Item>
+          <Form.Item name="employee_id" label="Xodim">
+            <Select
+              allowClear
+              showSearch
+              placeholder="Xodimni tanlang"
+              optionFilterProp="label"
+              options={
+                employees?.data.map((employee: Employee) => ({
+                  value: employee.id,
+                  label: `${employee.full_name}${employee.employee_code ? ` (#${employee.employee_code})` : ''}`
+                })) ?? []
+              }
+            />
+          </Form.Item>
+          <Form.Item name="os_name" label="Operatsion tizim">
+            <Input placeholder="Windows 11 / macOS 15" />
+          </Form.Item>
+          <Form.Item name="agent_version" label="Agent versiyasi">
+            <Input placeholder="1.0.0" />
           </Form.Item>
           <Form.Item name="is_active" label="Holati" initialValue={true}>
             <Select>

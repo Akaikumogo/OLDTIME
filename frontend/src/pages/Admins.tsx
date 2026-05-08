@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Empty, Form, Input, Modal, Table, Tag, Select, message, Popconfirm } from 'antd';
+import { Alert, Button, Empty, Form, Input, Modal, Table, Tag, Select, message, Popconfirm } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Plus, RefreshCw, Edit, Trash2 } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiService from '@/services/api';
 import type { AuthUser } from '@/services/api';
 import { formatDisplayDate } from '@/utils/date';
+import { canCreateAdmin, isSuperAdmin } from '@/utils/can';
 
 const Admins = () => {
   const [page, setPage] = useState(1);
@@ -15,6 +16,8 @@ const Admins = () => {
   const [editingAdmin, setEditingAdmin] = useState<AuthUser | null>(null);
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
+  const superAdmin = isSuperAdmin();
+  const canAddAdmin = canCreateAdmin();
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['admins', page, limit],
@@ -23,6 +26,12 @@ const Admins = () => {
         page,
         limit
       })
+  });
+
+  const { data: operationsStatus } = useQuery({
+    queryKey: ['operations-status'],
+    queryFn: () => apiService.getOperationsStatus(),
+    enabled: superAdmin
   });
 
   const createMutation = useMutation({
@@ -90,6 +99,7 @@ const Admins = () => {
     setEditingAdmin(admin);
     form.setFieldsValue({
       full_name: admin.full_name,
+      username: admin.username,
       email: admin.email,
       role: admin.role,
       is_active: admin.is_active
@@ -203,11 +213,38 @@ const Admins = () => {
           >
             Yangilash
           </Button>
-          <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>
-            Qo'shish
-          </Button>
+          {canAddAdmin ? (
+            <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>
+              Qo'shish
+            </Button>
+          ) : null}
         </div>
       </div>
+
+      {superAdmin && operationsStatus ? (
+        <div className="mb-5 grid gap-3 md:grid-cols-2">
+          <Alert
+            type={operationsStatus.backup.configured && operationsStatus.backup.exists ? 'success' : 'warning'}
+            showIcon
+            message="Backup monitoring"
+            description={
+              operationsStatus.backup.latest_file
+                ? `${operationsStatus.backup.latest_file.name} (${Math.round(operationsStatus.backup.latest_file.size_bytes / 1024)} KB)`
+                : 'BACKUP_DIR sozlanmagan yoki backup fayl topilmadi'
+            }
+          />
+          <Alert
+            type={operationsStatus.logs.configured && operationsStatus.logs.exists ? 'success' : 'warning'}
+            showIcon
+            message="Log monitoring"
+            description={
+              operationsStatus.logs.latest_file
+                ? `${operationsStatus.logs.latest_file.name} (${operationsStatus.logs.file_count ?? 0} fayl)`
+                : 'LOG_DIR sozlanmagan yoki log fayl topilmadi'
+            }
+          />
+        </div>
+      ) : null}
 
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -261,6 +298,13 @@ const Admins = () => {
             <Input placeholder="Ism Familiya" />
           </Form.Item>
           <Form.Item
+            name="username"
+            label="Username"
+            rules={[{ required: true, message: 'Username kiriting' }]}
+          >
+            <Input placeholder="username" disabled={!!editingAdmin} />
+          </Form.Item>
+          <Form.Item
             name="email"
             label="Email"
             rules={[{ required: true, message: 'Emailni kiriting' }]}
@@ -279,9 +323,10 @@ const Admins = () => {
             label="Rol"
             rules={[{ required: true, message: 'Rolni tanlang' }]}
           >
-            <Select>
+            <Select disabled={!superAdmin}>
+              <Select.Option value="superadmin">Superadmin</Select.Option>
               <Select.Option value="admin">Admin</Select.Option>
-              <Select.Option value="hr">HR</Select.Option>
+              <Select.Option value="hr">Kadr (read-only)</Select.Option>
               <Select.Option value="manager">Manager</Select.Option>
             </Select>
           </Form.Item>

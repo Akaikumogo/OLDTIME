@@ -22,6 +22,7 @@ MIGRATION_FILES = (
     "002_audit_log_set_null_on_delete.sql",
     "003_add_employee_code.sql",
     "004_add_employee_photo.sql",
+    "005_add_computer_device_id.sql",
 )
 
 
@@ -35,6 +36,7 @@ def _read_default_superadmin() -> dict:
         "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", "").strip(),
         "email": os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip(),
         "password": os.getenv("BOOTSTRAP_ADMIN_PASSWORD", ""),
+        "role": os.getenv("BOOTSTRAP_ADMIN_ROLE", "superadmin").strip() or "superadmin",
     }
 
 
@@ -82,6 +84,14 @@ def seed_default_superadmin(cur):
         cur.execute("SELECT COUNT(*) FROM admins")
         count = cur.fetchone()[0]
         if count > 0:
+            cur.execute(
+                """
+                UPDATE admins
+                SET role = %s
+                WHERE username = %s OR email = %s
+                """,
+                (bootstrap["role"], bootstrap["username"], bootstrap["email"]),
+            )
             return
 
         cur.execute(
@@ -93,12 +103,13 @@ def seed_default_superadmin(cur):
 
         hashed = hash_password(bootstrap["password"])
         cur.execute(
-            "INSERT INTO admins (full_name, username, email, password_hash) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO admins (full_name, username, email, password_hash, role) VALUES (%s, %s, %s, %s, %s)",
             (
                 bootstrap["full_name"],
                 bootstrap["username"],
                 bootstrap["email"],
                 hashed,
+                bootstrap["role"],
             ),
         )
         print(f"[INFO] Bootstrap admin seeded: {bootstrap['username']}")

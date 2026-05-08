@@ -15,6 +15,7 @@ import AnimateWrapper from './components/AnimateWrapper';
 const LoginPage = lazy(() => import('./pages/Login/Login'));
 const Home = lazy(() => import('./pages/Home'));
 const Employees = lazy(() => import('./pages/Employees'));
+const EmployeeDetail = lazy(() => import('./pages/EmployeeDetail'));
 const Departments = lazy(() => import('./pages/Departments'));
 const AttendanceEvents = lazy(() => import('./pages/AttendanceEvents'));
 const AttendancePolicy = lazy(
@@ -57,6 +58,10 @@ export const routes: RouteObject[] = [
           {
             path: 'employees',
             element: withSuspense(Employees)
+          },
+          {
+            path: 'employees/:employeeId',
+            element: withSuspense(EmployeeDetail)
           },
           {
             path: 'departments',

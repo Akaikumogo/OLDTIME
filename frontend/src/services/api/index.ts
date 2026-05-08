@@ -97,6 +97,34 @@ export type LoginResponse = {
 };
 
 export type MessageResponse = { message: string };
+export type OperationsStatus = {
+  backup: {
+    configured: boolean;
+    exists: boolean;
+    path?: string;
+    file_count?: number;
+    latest_file?: {
+      name: string;
+      size_bytes: number;
+      modified_at: number;
+    } | null;
+  };
+  logs: {
+    configured: boolean;
+    exists: boolean;
+    path?: string;
+    file_count?: number;
+    latest_file?: {
+      name: string;
+      size_bytes: number;
+      modified_at: number;
+    } | null;
+  };
+  database: {
+    backup_dir_env: boolean;
+    log_dir_env: boolean;
+  };
+};
 
 export type AdminEnvelope = { message: string; admin: AuthUser };
 export type AdminListMeta = {
@@ -339,6 +367,7 @@ export type EmployeeTimeline = {
 
 export type Computer = {
   id: string;
+  device_id?: string | null;
   hostname: string;
   mac_address: string;
   ip_address?: string | null;
@@ -358,8 +387,11 @@ export type ComputerListResponse = {
 
 export type ComputerActivity = {
   id: string;
+  device_id?: string | null;
   computer_id: string;
   employee_id?: string | null;
+  computer?: { id: string; hostname: string } | null;
+  employee?: { id: string; full_name: string } | null;
   app_name: string;
   window_title?: string | null;
   url?: string | null;
@@ -514,6 +546,7 @@ class ApiService {
     username: string;
     email: string;
     password: string;
+    role?: string;
   }) {
     const { data } = await this.api.post<AdminEnvelope>('/admin/create', body);
     return data.admin;
@@ -535,6 +568,13 @@ class ApiService {
   async deleteAdmin(adminId: string) {
     const { data } = await this.api.delete<MessageResponse>(
       `/admin/${adminId}`
+    );
+    return data;
+  }
+
+  async getOperationsStatus() {
+    const { data } = await this.api.get<OperationsStatus>(
+      '/system/operations-status'
     );
     return data;
   }
@@ -972,6 +1012,7 @@ class ApiService {
   }
 
   async createComputer(body: {
+    device_id?: string | null;
     hostname: string;
     mac_address: string;
     ip_address?: string | null;
@@ -988,6 +1029,7 @@ class ApiService {
     computerId: string,
     body: Partial<{
       hostname: string;
+      device_id: string | null;
       mac_address: string;
       ip_address: string | null;
       os_name: string | null;

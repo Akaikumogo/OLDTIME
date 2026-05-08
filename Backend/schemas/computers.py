@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class ComputerHeartbeat(BaseModel):
+    device_id: Optional[str] = Field(None, min_length=8, max_length=64)
     hostname: str = Field(..., min_length=1, max_length=255)
     mac_address: str = Field(..., min_length=5, max_length=64)
     ip_address: Optional[str] = Field(None, max_length=64)
@@ -17,6 +18,7 @@ class ComputerAssign(BaseModel):
 
 
 class ComputerCreate(BaseModel):
+    device_id: Optional[str] = Field(None, min_length=8, max_length=64)
     hostname: str = Field(..., min_length=1, max_length=255)
     mac_address: str = Field(..., min_length=5, max_length=64)
     ip_address: Optional[str] = Field(None, max_length=64)
@@ -27,6 +29,7 @@ class ComputerCreate(BaseModel):
 
 
 class ComputerUpdate(BaseModel):
+    device_id: Optional[str] = Field(None, min_length=8, max_length=64)
     hostname: Optional[str] = Field(None, min_length=1, max_length=255)
     mac_address: Optional[str] = Field(None, min_length=5, max_length=64)
     ip_address: Optional[str] = Field(None, max_length=64)
@@ -38,6 +41,7 @@ class ComputerUpdate(BaseModel):
 
 class ComputerRef(BaseModel):
     id: str
+    device_id: Optional[str] = None
     hostname: str
     mac_address: str
     ip_address: Optional[str]
@@ -76,6 +80,7 @@ class ComputerActivityCreate(BaseModel):
 
 
 class ComputerActivityBatch(BaseModel):
+    device_id: Optional[str] = Field(None, min_length=8, max_length=64)
     mac_address: str = Field(..., min_length=5, max_length=64)
     events: list[ComputerActivityCreate]
     employee_id: Optional[str] = None
@@ -85,6 +90,8 @@ class ComputerActivityResponse(BaseModel):
     id: str
     computer_id: str
     employee_id: Optional[str]
+    computer: Optional[dict] = None
+    employee: Optional[dict] = None
     app_name: str
     window_title: Optional[str]
     url: Optional[str]

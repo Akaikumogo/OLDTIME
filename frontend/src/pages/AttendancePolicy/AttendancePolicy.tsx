@@ -12,6 +12,7 @@ import {
 } from 'antd';
 import apiService from '@/services/api';
 import type { AttendancePolicy } from '@/services/api';
+import { canWrite } from '@/utils/can';
 
 const { Title, Paragraph } = Typography;
 
@@ -20,6 +21,7 @@ export default function AttendancePolicyPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [policy, setPolicy] = useState<AttendancePolicy | null>(null);
+  const writable = canWrite();
 
   useEffect(() => {
     const loadPolicy = async () => {
@@ -98,6 +100,7 @@ export default function AttendancePolicyPage() {
           form={form}
           layout="vertical"
           onFinish={handleFinish}
+          disabled={!writable}
           initialValues={{
             work_start_time: policy?.work_start_time?.slice(0, 5) ?? '09:00',
             work_end_time: policy?.work_end_time?.slice(0, 5) ?? '18:00',
@@ -168,9 +171,11 @@ export default function AttendancePolicyPage() {
           </Form.Item>
 
           <Form.Item>
-            <Button type="primary" htmlType="submit" loading={saving}>
-              Saqlash
-            </Button>
+            {writable ? (
+              <Button type="primary" htmlType="submit" loading={saving}>
+                Saqlash
+              </Button>
+            ) : null}
           </Form.Item>
         </Form>
       </Card>

@@ -7,12 +7,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiService from '@/services/api';
 import type { Department } from '@/services/api';
 import { formatDisplayDate } from '@/utils/date';
+import { canWrite } from '@/utils/can';
 
 const Departments = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
+  const writable = canWrite();
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['departments'],
@@ -122,25 +124,29 @@ const Departments = () => {
       width: 120,
       render: (_, record: Department) => (
         <div className="flex gap-2">
-          <Button
-            type="text"
-            size="small"
-            icon={<Edit size={16} />}
-            onClick={() => handleEdit(record)}
-          />
-          <Popconfirm
-            title="Bo'limni o'chirmoqchimisiz?"
-            onConfirm={() => handleDelete(record.id)}
-            okText="Ha"
-            cancelText="Yo'q"
-          >
-            <Button
-              type="text"
-              size="small"
-              danger
-              icon={<Trash2 size={16} />}
-            />
-          </Popconfirm>
+          {writable ? (
+            <>
+              <Button
+                type="text"
+                size="small"
+                icon={<Edit size={16} />}
+                onClick={() => handleEdit(record)}
+              />
+              <Popconfirm
+                title="Bo'limni o'chirmoqchimisiz?"
+                onConfirm={() => handleDelete(record.id)}
+                okText="Ha"
+                cancelText="Yo'q"
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<Trash2 size={16} />}
+                />
+              </Popconfirm>
+            </>
+          ) : null}
         </div>
       )
     }
@@ -166,9 +172,11 @@ const Departments = () => {
           >
             Yangilash
           </Button>
-          <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>
-            Qo'shish
-          </Button>
+          {writable ? (
+            <Button type="primary" icon={<Plus size={16} />} onClick={() => setIsModalOpen(true)}>
+              Qo'shish
+            </Button>
+          ) : null}
         </div>
       </div>
 

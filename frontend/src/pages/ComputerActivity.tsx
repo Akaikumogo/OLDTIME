@@ -5,8 +5,10 @@ import { RefreshCw } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useQuery } from '@tanstack/react-query';
 import apiService from '@/services/api';
+import type { ComputerActivity as ComputerActivityRow } from '@/services/api';
 import { DateFilter } from '@/components/filters/DateFilter';
 import { formatDateTime } from '@/utils/date';
+import { secondsToHuman } from '@/utils/time';
 
 const ComputerActivity = () => {
   const [page, setPage] = useState(1);
@@ -25,7 +27,7 @@ const ComputerActivity = () => {
       })
   });
 
-  const columns: ColumnsType<any> = [
+  const columns: ColumnsType<ComputerActivityRow> = [
     {
       title: 'ID',
       dataIndex: 'id',
@@ -34,13 +36,13 @@ const ComputerActivity = () => {
     },
     {
       title: 'Kompyuter',
-      dataIndex: ['computer', 'name'],
-      render: (name: string) => name || '-'
+      dataIndex: ['computer', 'hostname'],
+      render: (name: string | undefined, record) => name || record.computer_id.slice(0, 8)
     },
     {
       title: 'Xodim',
       dataIndex: ['employee', 'full_name'],
-      render: (name: string) => name || '-'
+      render: (name: string | undefined) => name || '-'
     },
     {
       title: 'Dastur',
@@ -81,11 +83,7 @@ const ComputerActivity = () => {
       title: 'Davomiylik',
       dataIndex: 'duration_seconds',
       width: 100,
-      render: (seconds: number) => {
-        const hours = Math.floor(seconds / 3600);
-        const mins = Math.floor((seconds % 3600) / 60);
-        return `${hours}h ${mins}m`;
-      }
+      render: (seconds: number) => secondsToHuman(seconds)
     }
   ];
 

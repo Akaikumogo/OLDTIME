@@ -8,6 +8,7 @@ class AdminCreate(BaseModel):
     username: str
     email: str
     password: str
+    role: str = "admin"
 
 
 class AdminUpdate(BaseModel):

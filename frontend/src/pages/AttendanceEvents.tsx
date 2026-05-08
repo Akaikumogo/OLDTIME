@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Avatar,
   Button,
+  DatePicker,
   Empty,
   Form,
   Image,
@@ -17,15 +18,14 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  AlertTriangle,
   Edit,
   ImageIcon,
   Link2,
   RefreshCw,
-  Search,
   Trash2,
   UserCircle2
 } from 'lucide-react';
+import dayjs from 'dayjs';
 import { motion } from 'motion/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiService, {
@@ -33,8 +33,8 @@ import apiService, {
   type AttendanceEvent,
   type Employee
 } from '@/services/api';
-import { DateFilter } from '@/components/filters/DateFilter';
 import { formatDateTime } from '@/utils/date';
+import { canWrite } from '@/utils/can';
 
 const buildImageUrl = (raw?: string | null): string | undefined => {
   if (!raw) return undefined;
@@ -79,7 +79,7 @@ const AttendanceEvents = () => {
   const [limit, setLimit] = useState(20);
   const [dateFrom, setDateFrom] = useState<string | undefined>();
   const [dateTo, setDateTo] = useState<string | undefined>();
-  const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  const [eventTypeFilter, setEventTypeFilter] = useState<string | undefined>();
   const [matchFilter, setMatchFilter] = useState<MatchFilter>('all');
   const [search, setSearch] = useState('');
 
@@ -91,6 +91,7 @@ const AttendanceEvents = () => {
   const [linkSelectedEmployee, setLinkSelectedEmployee] = useState<string | undefined>();
 
   const queryClient = useQueryClient();
+  const writable = canWrite();
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: [
@@ -99,7 +100,7 @@ const AttendanceEvents = () => {
       limit,
       dateFrom,
       dateTo,
-      statusFilter,
+      eventTypeFilter,
       matchFilter,
       search
     ],
@@ -109,7 +110,7 @@ const AttendanceEvents = () => {
         limit,
         date_from: dateFrom,
         date_to: dateTo,
-        status: statusFilter,
+        event_type: eventTypeFilter,
         match_status: matchFilter === 'all' ? undefined : matchFilter,
         employee_name: search || undefined,
         sort: 'event_timestamp',
@@ -186,6 +187,8 @@ const AttendanceEvents = () => {
     data?.data.filter(
       (e) => e.match_status === 'unmatched' || e.match_status === 'ambiguous'
     ).length ?? 0;
+
+  const resetToFirstPage = () => setPage(1);
 
   const columns: ColumnsType<AttendanceEvent> = [
     {
@@ -298,7 +301,7 @@ const AttendanceEvents = () => {
           record.match_status === 'unmatched' || record.match_status === 'ambiguous';
         return (
           <div className="flex gap-1">
-            {needsLink ? (
+            {writable && needsLink ? (
               <Tooltip title="Xodimga biriktirish">
                 <Button
                   type="text"
@@ -311,25 +314,29 @@ const AttendanceEvents = () => {
                 />
               </Tooltip>
             ) : null}
-            <Tooltip title="Tahrirlash">
-              <Button
-                type="text"
-                size="small"
-                icon={<Edit size={16} />}
-                onClick={() => handleEdit(record)}
-              />
-            </Tooltip>
-            <Popconfirm
-              title="Hodisani o'chirmoqchimisiz?"
-              description="Audit log saqlanib qoladi."
-              onConfirm={() => deleteMutation.mutate(record.id)}
-              okText="Ha"
-              cancelText="Yo'q"
-            >
-              <Tooltip title="O'chirish">
-                <Button type="text" size="small" danger icon={<Trash2 size={16} />} />
-              </Tooltip>
-            </Popconfirm>
+            {writable ? (
+              <>
+                <Tooltip title="Tahrirlash">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Edit size={16} />}
+                    onClick={() => handleEdit(record)}
+                  />
+                </Tooltip>
+                <Popconfirm
+                  title="Hodisani o'chirmoqchimisiz?"
+                  description="Audit log saqlanib qoladi."
+                  onConfirm={() => deleteMutation.mutate(record.id)}
+                  okText="Ha"
+                  cancelText="Yo'q"
+                >
+                  <Tooltip title="O'chirish">
+                    <Button type="text" size="small" danger icon={<Trash2 size={16} />} />
+                  </Tooltip>
+                </Popconfirm>
+              </>
+            ) : null}
           </div>
         );
       }
@@ -337,8 +344,8 @@ const AttendanceEvents = () => {
   ];
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+    <div className="h-full overflow-y-auto">
+      <div className="flex max-w-none flex-col gap-5 p-6">
         <div>
           <h2 className="text-2xl font-bold text-slate-950 dark:text-white">
             Davomat hodisalari
@@ -346,83 +353,155 @@ const AttendanceEvents = () => {
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Kirish va chiqish eventlari, biriktirilmaganlarni qo'lda biriktirish
           </p>
-          {unmatchedCount > 0 && matchFilter === 'all' ? (
-            <button
-              onClick={() => setMatchFilter('unmatched_or_ambiguous')}
-              className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:bg-orange-950/40 dark:text-orange-300"
-            >
-              <AlertTriangle size={12} />
-              {unmatchedCount} ta event biriktirilmagan — ko'rsatish
-            </button>
-          ) : null}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Segmented
-            value={matchFilter}
-            onChange={(v) => setMatchFilter(v as MatchFilter)}
-            options={[
-              { value: 'all', label: 'Hammasi' },
-              { value: 'matched', label: 'Biriktirilgan' },
-              { value: 'unmatched_or_ambiguous', label: 'Biriktirilmagan' }
-            ]}
-          />
-          <Input
-            placeholder="Xodim ismi..."
-            prefix={<Search size={16} />}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onPressEnter={() => void refetch()}
-            style={{ width: 200 }}
-            allowClear
-          />
-          <DateFilter value={dateFrom} onChange={setDateFrom} placeholder="Dan" allowClear />
-          <DateFilter value={dateTo} onChange={setDateTo} placeholder="Gacha" allowClear />
-          <Select
-            placeholder="Status"
-            allowClear
-            style={{ width: 140 }}
-            value={statusFilter}
-            onChange={setStatusFilter}
-            options={Object.entries(STATUS_LABELS).map(([value, label]) => ({
-              value,
-              label
-            }))}
-          />
-          <Button
-            icon={<RefreshCw size={16} />}
-            loading={isFetching}
-            onClick={() => void refetch()}
-          >
-            Yangilash
-          </Button>
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div className="min-w-0">
+              <Segmented
+                size="large"
+                value={matchFilter}
+                onChange={(v) => {
+                  resetToFirstPage();
+                  setMatchFilter(v as MatchFilter);
+                }}
+                options={[
+                  { value: 'all', label: 'Hammasi' },
+                  { value: 'matched', label: 'Biriktirilgan' },
+                  {
+                    value: 'unmatched_or_ambiguous',
+                    label: `Biriktirilmagan${unmatchedCount > 0 ? ` (${unmatchedCount})` : ''}`
+                  }
+                ]}
+              />
+            </div>
+
+            <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:w-auto xl:grid-cols-[minmax(220px,280px)_160px_160px_150px_auto] xl:items-end">
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Qidiruv
+                </label>
+                <Input.Search
+                  size="large"
+                  placeholder="Xodim ismi..."
+                  value={search}
+                  onChange={(e) => {
+                    resetToFirstPage();
+                    setSearch(e.target.value);
+                  }}
+                  onSearch={() => void refetch()}
+                  allowClear
+                  className="[&_.ant-input-affix-wrapper]:rounded-[10px] [&_.ant-input-group-addon_.ant-btn]:rounded-r-[10px]"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Boshlanish sanasi
+                </label>
+                <DatePicker
+                  size="large"
+                  value={dateFrom ? dayjs(dateFrom) : null}
+                  onChange={(date) => {
+                    resetToFirstPage();
+                    setDateFrom(date ? date.format('YYYY-MM-DD') : undefined);
+                  }}
+                  placeholder="Dan"
+                  allowClear
+                  format="DD.MM.YYYY"
+                  className="w-full rounded-[10px]"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Tugash sanasi
+                </label>
+                <DatePicker
+                  size="large"
+                  value={dateTo ? dayjs(dateTo) : null}
+                  onChange={(date) => {
+                    resetToFirstPage();
+                    setDateTo(date ? date.format('YYYY-MM-DD') : undefined);
+                  }}
+                  placeholder="Gacha"
+                  allowClear
+                  format="DD.MM.YYYY"
+                  className="w-full rounded-[10px]"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Hodisa turi
+                </label>
+                <Select
+                  size="large"
+                  value={eventTypeFilter}
+                  onChange={(value) => {
+                    resetToFirstPage();
+                    setEventTypeFilter(value);
+                  }}
+                  placeholder="Hammasi"
+                  allowClear
+                  className="w-full [&_.ant-select-selector]:!rounded-[10px]"
+                  options={[
+                    { value: 'entry', label: 'Kirish' },
+                    { value: 'exit', label: 'Chiqish' }
+                  ]}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="hidden text-sm font-medium text-transparent xl:block">
+                  Amal
+                </span>
+                <Button
+                  size="large"
+                  icon={<RefreshCw size={16} />}
+                  loading={isFetching}
+                  onClick={() => void refetch()}
+                  className="h-10 w-full rounded-[10px] text-sm xl:w-auto"
+                >
+                  Yangilash
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22 }}
+          className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950"
+        >
+          <Table
+            rowKey="id"
+            columns={columns}
+            dataSource={data?.data ?? []}
+            loading={isLoading}
+            pagination={{
+              current: page,
+              pageSize: limit,
+              total: data?.meta.total ?? 0,
+              showSizeChanger: true,
+              onChange: (p, l) => {
+                setPage(p);
+                setLimit(l);
+              }
+            }}
+            scroll={{ x: 1200 }}
+            locale={{
+              emptyText: (
+                <div className="flex min-h-[260px] items-center justify-center">
+                  <Empty description="Hodisalar topilmadi" />
+                </div>
+              )
+            }}
+          />
+        </motion.div>
       </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.22 }}
-      >
-        <Table
-          rowKey="id"
-          columns={columns}
-          dataSource={data?.data ?? []}
-          loading={isLoading}
-          pagination={{
-            current: page,
-            pageSize: limit,
-            total: data?.meta.total ?? 0,
-            showSizeChanger: true,
-            onChange: (p, l) => {
-              setPage(p);
-              setLimit(l);
-            }
-          }}
-          scroll={{ x: 1200 }}
-          locale={{ emptyText: <Empty description="Hodisalar topilmadi" /> }}
-        />
-      </motion.div>
 
       {/* Edit modal */}
       <Modal

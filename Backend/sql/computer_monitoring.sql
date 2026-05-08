@@ -3,6 +3,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS computers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     employee_id UUID REFERENCES employees(id) ON DELETE SET NULL,
+    device_id VARCHAR(64) UNIQUE,
     hostname VARCHAR(255) NOT NULL,
     mac_address VARCHAR(64) NOT NULL UNIQUE,
     ip_address VARCHAR(64),
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS computers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_computers_employee_id ON computers(employee_id);
+CREATE INDEX IF NOT EXISTS idx_computers_device_id ON computers(device_id);
 CREATE INDEX IF NOT EXISTS idx_computers_mac_address ON computers(mac_address);
 CREATE INDEX IF NOT EXISTS idx_computers_last_seen_at ON computers(last_seen_at);
 

@@ -33,26 +33,27 @@ def _require_agent_token(authorization: str | None = Header(None)):
 
 
 def _serialize_computer(row):
-    last_seen_at = row[7]
+    last_seen_at = row[8]
     connection_status = "unknown"
     if last_seen_at:
         connection_status = "online" if datetime.now() - last_seen_at <= timedelta(minutes=2) else "offline"
     employee = None
-    if row[10]:
+    if row[11]:
         employee = {
-            "id": str(row[10]),
-            "full_name": row[11],
+            "id": str(row[11]),
+            "full_name": row[12],
         }
     return {
         "id": str(row[0]),
-        "hostname": row[1],
-        "mac_address": row[2],
-        "ip_address": row[3],
-        "os_name": row[4],
-        "agent_version": row[5],
-        "is_active": row[6],
+        "device_id": row[1],
+        "hostname": row[2],
+        "mac_address": row[3],
+        "ip_address": row[4],
+        "os_name": row[5],
+        "agent_version": row[6],
+        "is_active": row[7],
         "last_seen_at": str(last_seen_at) if last_seen_at else None,
-        "created_at": str(row[8]),
+        "created_at": str(row[9]),
         "connection_status": connection_status,
         "employee": employee,
     }
@@ -62,6 +63,7 @@ def _computer_select():
     return """
         SELECT
             c.id,
+            c.device_id,
             c.hostname,
             c.mac_address,
             c.ip_address,
@@ -79,10 +81,24 @@ def _computer_select():
 
 
 def _serialize_activity(row):
+    computer = None
+    if len(row) > 10 and row[10]:
+        computer = {
+            "id": str(row[1]),
+            "hostname": row[10],
+        }
+    employee = None
+    if len(row) > 11 and row[11]:
+        employee = {
+            "id": str(row[2]),
+            "full_name": row[11],
+        }
     return {
         "id": str(row[0]),
         "computer_id": str(row[1]),
         "employee_id": str(row[2]) if row[2] else None,
+        "computer": computer,
+        "employee": employee,
         "app_name": row[3],
         "window_title": row[4],
         "url": row[5],
@@ -116,6 +132,26 @@ def _ensure_active_employee(cur, employee_id: str | None):
         raise HTTPException(status_code=404, detail="Employee not found")
 
 
+def _find_computer_for_agent(cur, device_id: str | None, mac_address: str):
+    if device_id:
+        cur.execute(
+            """
+            SELECT id, employee_id
+            FROM computers
+            WHERE device_id = %s OR mac_address = %s
+            ORDER BY CASE WHEN device_id = %s THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (device_id, mac_address, device_id),
+        )
+    else:
+        cur.execute(
+            "SELECT id, employee_id FROM computers WHERE mac_address = %s",
+            (mac_address,),
+        )
+    return cur.fetchone()
+
+
 @router.post(
     "/internal/computers/heartbeat",
     response_model=ComputerEnvelope,
@@ -128,39 +164,64 @@ def computer_heartbeat(data: ComputerHeartbeat, _token=Depends(_require_agent_to
                 cur.execute("SELECT 1 FROM employees WHERE id = %s", (data.employee_id,))
                 if not cur.fetchone():
                     raise HTTPException(status_code=404, detail="Employee not found")
-            cur.execute(
-                """
-                INSERT INTO computers (
-                    hostname,
-                    mac_address,
-                    ip_address,
-                    os_name,
-                    agent_version,
-                    employee_id,
-                    last_seen_at
+            existing = _find_computer_for_agent(cur, data.device_id, data.mac_address)
+            if existing:
+                cur.execute(
+                    """
+                    UPDATE computers
+                    SET
+                        device_id = COALESCE(%s, device_id),
+                        hostname = %s,
+                        mac_address = %s,
+                        ip_address = %s,
+                        os_name = %s,
+                        agent_version = %s,
+                        employee_id = COALESCE(%s, employee_id),
+                        is_active = TRUE,
+                        last_seen_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id
+                    """,
+                    (
+                        data.device_id,
+                        data.hostname,
+                        data.mac_address,
+                        data.ip_address,
+                        data.os_name,
+                        data.agent_version,
+                        data.employee_id,
+                        existing[0],
+                    ),
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (mac_address) DO UPDATE SET
-                    hostname = EXCLUDED.hostname,
-                    ip_address = EXCLUDED.ip_address,
-                    os_name = EXCLUDED.os_name,
-                    agent_version = EXCLUDED.agent_version,
-                    employee_id = COALESCE(EXCLUDED.employee_id, computers.employee_id),
-                    is_active = TRUE,
-                    last_seen_at = NOW(),
-                    updated_at = NOW()
-                RETURNING id
-                """,
-                (
-                    data.hostname,
-                    data.mac_address,
-                    data.ip_address,
-                    data.os_name,
-                    data.agent_version,
-                    data.employee_id,
-                ),
-            )
-            computer_id = cur.fetchone()[0]
+                computer_id = cur.fetchone()[0]
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO computers (
+                        device_id,
+                        hostname,
+                        mac_address,
+                        ip_address,
+                        os_name,
+                        agent_version,
+                        employee_id,
+                        last_seen_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    RETURNING id
+                    """,
+                    (
+                        data.device_id,
+                        data.hostname,
+                        data.mac_address,
+                        data.ip_address,
+                        data.os_name,
+                        data.agent_version,
+                        data.employee_id,
+                    ),
+                )
+                computer_id = cur.fetchone()[0]
             cur.execute(_computer_select() + " WHERE c.id = %s", (computer_id,))
             row = cur.fetchone()
             conn.commit()
@@ -175,11 +236,7 @@ def computer_heartbeat(data: ComputerHeartbeat, _token=Depends(_require_agent_to
 def create_activity_events(data: ComputerActivityBatch, _token=Depends(_require_agent_token)):
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, employee_id FROM computers WHERE mac_address = %s",
-                (data.mac_address,),
-            )
-            computer = cur.fetchone()
+            computer = _find_computer_for_agent(cur, data.device_id, data.mac_address)
             if not computer:
                 raise HTTPException(status_code=404, detail="Computer not registered")
 
@@ -306,12 +363,17 @@ def create_computer(data: ComputerCreate, user=Depends(require_role(["admin", "h
     with get_connection() as conn:
         with conn.cursor() as cur:
             _ensure_active_employee(cur, data.employee_id)
+            if data.device_id:
+                cur.execute("SELECT 1 FROM computers WHERE device_id = %s", (data.device_id,))
+                if cur.fetchone():
+                    raise HTTPException(status_code=409, detail="Computer with this device ID already exists")
             cur.execute("SELECT 1 FROM computers WHERE mac_address = %s", (data.mac_address,))
             if cur.fetchone():
                 raise HTTPException(status_code=409, detail="Computer with this MAC already exists")
             cur.execute(
                 """
                 INSERT INTO computers (
+                    device_id,
                     hostname,
                     mac_address,
                     ip_address,
@@ -321,10 +383,11 @@ def create_computer(data: ComputerCreate, user=Depends(require_role(["admin", "h
                     is_active,
                     updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING id
                 """,
                 (
+                    data.device_id,
                     data.hostname,
                     data.mac_address,
                     data.ip_address,
@@ -356,6 +419,7 @@ def update_computer(
     values = []
 
     field_map = {
+        "device_id": "device_id",
         "hostname": "hostname",
         "mac_address": "mac_address",
         "ip_address": "ip_address",
@@ -384,6 +448,13 @@ def update_computer(
                 )
                 if cur.fetchone():
                     raise HTTPException(status_code=409, detail="Computer with this MAC already exists")
+            if data.device_id is not None:
+                cur.execute(
+                    "SELECT 1 FROM computers WHERE device_id = %s AND id <> %s",
+                    (data.device_id, computer_id),
+                )
+                if cur.fetchone():
+                    raise HTTPException(status_code=409, detail="Computer with this device ID already exists")
 
             values.append(computer_id)
             cur.execute(
@@ -502,19 +573,23 @@ def list_computer_activity(
             cur.execute(
                 f"""
                 SELECT
-                    id,
-                    computer_id,
-                    employee_id,
-                    app_name,
-                    window_title,
-                    url,
-                    started_at,
-                    ended_at,
-                    duration_seconds,
-                    created_at
+                    cae.id,
+                    cae.computer_id,
+                    cae.employee_id,
+                    cae.app_name,
+                    cae.window_title,
+                    cae.url,
+                    cae.started_at,
+                    cae.ended_at,
+                    cae.duration_seconds,
+                    cae.created_at,
+                    c.hostname,
+                    e.full_name
                 FROM computer_activity_events cae
+                LEFT JOIN computers c ON c.id = cae.computer_id
+                LEFT JOIN employees e ON e.id = cae.employee_id
                 {where_clause}
-                ORDER BY started_at DESC
+                ORDER BY cae.started_at DESC
                 LIMIT %s OFFSET %s
                 """,
                 params + [limit, offset],
@@ -597,19 +672,23 @@ def computer_analytics(
             cur.execute(
                 f"""
                 SELECT
-                    id,
-                    computer_id,
-                    employee_id,
-                    app_name,
-                    window_title,
-                    url,
-                    started_at,
-                    ended_at,
-                    duration_seconds,
-                    created_at
+                    cae.id,
+                    cae.computer_id,
+                    cae.employee_id,
+                    cae.app_name,
+                    cae.window_title,
+                    cae.url,
+                    cae.started_at,
+                    cae.ended_at,
+                    cae.duration_seconds,
+                    cae.created_at,
+                    c.hostname,
+                    e.full_name
                 FROM computer_activity_events cae
+                LEFT JOIN computers c ON c.id = cae.computer_id
+                LEFT JOIN employees e ON e.id = cae.employee_id
                 {where_clause}
-                ORDER BY started_at DESC
+                ORDER BY cae.started_at DESC
                 LIMIT 20
                 """,
                 params,

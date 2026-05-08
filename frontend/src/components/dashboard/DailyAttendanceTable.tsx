@@ -1,5 +1,6 @@
-import { Empty, Table, Tag } from 'antd';
+import { Empty, Input, Select, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { useMemo, useState } from 'react';
 import { CalendarDays } from 'lucide-react';
 import {
   ATTENDANCE_STATUS_COLORS,
@@ -14,7 +15,42 @@ type DailyAttendanceTableProps = {
   onRowClick: (row: DashboardDailyRow) => void;
 };
 
+type PresenceFilter = 'all' | 'inside' | 'entered' | 'exited' | 'incomplete';
+
 export function DailyAttendanceTable({ rows, onRowClick }: DailyAttendanceTableProps) {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  const [presenceFilter, setPresenceFilter] = useState<PresenceFilter>('all');
+
+  const filteredRows = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      const matchesSearch =
+        !normalizedSearch ||
+        row.employee.full_name.toLowerCase().includes(normalizedSearch);
+      const matchesStatus =
+        !statusFilter || row.statuses.includes(statusFilter);
+      const hasEntry = Boolean(row.first_entry);
+      const hasExit = Boolean(row.last_exit);
+      const matchesPresence =
+        presenceFilter === 'all' ||
+        (presenceFilter === 'inside' && hasEntry && !hasExit) ||
+        (presenceFilter === 'entered' && hasEntry) ||
+        (presenceFilter === 'exited' && hasExit) ||
+        (presenceFilter === 'incomplete' && hasEntry !== hasExit);
+      return matchesSearch && matchesStatus && matchesPresence;
+    });
+  }, [presenceFilter, rows, search, statusFilter]);
+
+  const statusOptions = useMemo(() => {
+    const statuses = new Set<string>();
+    rows.forEach((row) => row.statuses.forEach((status) => statuses.add(status)));
+    return Array.from(statuses).map((status) => ({
+      value: status,
+      label: ATTENDANCE_STATUS_LABELS[status] || status
+    }));
+  }, [rows]);
+
   const columns: ColumnsType<DashboardDailyRow> = [
     {
       title: 'Xodim',
@@ -90,17 +126,48 @@ export function DailyAttendanceTable({ rows, onRowClick }: DailyAttendanceTableP
   return (
     <Table
       title={() => (
-        <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white">
-          <CalendarDays size={18} />
-          <span>Xodimlar jadvali</span>
+        <div className="space-y-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white">
+              <CalendarDays size={18} />
+              <span>Xodimlarning kirish-chiqish jadvali</span>
+              <Tag>{filteredRows.length} ta</Tag>
+            </div>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              <Input.Search
+                placeholder="Xodim qidirish"
+                allowClear
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <Select
+                placeholder="Status"
+                allowClear
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={statusOptions}
+              />
+              <Select
+                value={presenceFilter}
+                onChange={setPresenceFilter}
+                options={[
+                  { value: 'all', label: 'Hammasi' },
+                  { value: 'inside', label: 'Ichkarida' },
+                  { value: 'entered', label: 'Kirganlar' },
+                  { value: 'exited', label: 'Chiqqanlar' },
+                  { value: 'incomplete', label: "To'liq emas" }
+                ]}
+              />
+            </div>
+          </div>
         </div>
       )}
       rowKey="id"
       columns={columns}
-      dataSource={rows}
+      dataSource={filteredRows}
       scroll={{ x: 1050 }}
       pagination={{ pageSize: 20, showSizeChanger: true }}
-      locale={{ emptyText: <Empty description="Bugungi davomat topilmadi" /> }}
+      locale={{ emptyText: <Empty description="Davomat ma'lumoti topilmadi" /> }}
       onRow={(row) => ({
         onClick: () => onRowClick(row)
       })}
