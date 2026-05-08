@@ -15,13 +15,26 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS employees (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     full_name VARCHAR(255) NOT NULL,
+    -- Tabel raqami yoki kompaniya kodi. Hikvision'dan kelgan cardNo/employeeNoString
+    -- mosligi uchun ishlatiladi. NULLable, lekin agar bo'lsa unique.
+    employee_code VARCHAR(64),
     email VARCHAR(255),
     phone_number VARCHAR(20),
+    -- Xodim profil rasmi (URL yoki nisbiy yo'l: /static/employee_photos/xxx.jpg)
+    photo_url TEXT,
     department_id UUID REFERENCES departments(id),
     position_id UUID REFERENCES positions(id),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_employee_code
+    ON employees(employee_code)
+    WHERE employee_code IS NOT NULL;
+-- Active xodimlar orasida bir xil ism bo'lmasin (case-insensitive)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_active_full_name
+    ON employees(LOWER(TRIM(full_name)))
+    WHERE is_active = TRUE;
 
 CREATE TABLE IF NOT EXISTS employee_device_mappings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

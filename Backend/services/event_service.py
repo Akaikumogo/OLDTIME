@@ -7,12 +7,25 @@ from typing import Optional
 from fastapi import HTTPException
 
 from db import get_connection
+from services.app_config import get_config_bool
+from services.attendance_status import (
+    DayEvent,
+    ShiftPolicy,
+    StatusContext,
+    resolve_status as pure_resolve_status,
+)
 from services.device_service import (
     fetch_attendance_policy,
     find_employee_matches,
     find_employee_by_card_id,
     parse_datetime_input,
     create_employee_from_device,
+)
+from services.holidays_service import is_holiday as fetch_holiday_for
+from services.shifts_service import (
+    fetch_shift_for_employee,
+    policy_row_to_shift,
+    shift_row_to_policy,
 )
 
 
@@ -99,22 +112,25 @@ def _combine(day: date, value: Optional[time], tzinfo=None):
 
 
 def _compute_match(cur, employee_name: str, card_id: Optional[str] = None):
-    # First try to match by card_id if available
+    # 1) Card ID bo'yicha match (eng ishonchli)
     if card_id:
         card_match = find_employee_by_card_id(cur, card_id)
         if card_match:
             return str(card_match[0]), card_match[1], "matched"
 
-    # Fallback to name matching
+    # 2) Ism bo'yicha exact match
     matches = find_employee_matches(cur, employee_name)
     if len(matches) == 1:
         return str(matches[0][0]), matches[0][1], "matched"
     if len(matches) > 1:
         return None, employee_name, "ambiguous"
 
-    new_employee = create_employee_from_device(cur, employee_name)
-    if new_employee:
-        return str(new_employee[0]), new_employee[1], "matched"
+    # 3) Auto-create: agar yoqilgan bo'lsa (default ON), card_id employee_code'ga
+    #    yoziladi — keyingi safar shu karta orqali avtomatik topiladi.
+    if get_config_bool("AUTO_CREATE_EMPLOYEE_FROM_DEVICE", default=True):
+        new_employee = create_employee_from_device(cur, employee_name, card_id=card_id)
+        if new_employee:
+            return str(new_employee[0]), new_employee[1], "matched"
 
     return None, employee_name, "unmatched"
 
@@ -158,37 +174,73 @@ def _normalize_previous_exit_statuses(cur, employee_id: str, day: date):
     )
 
 
+def _build_shift_for_event(cur, employee_id: Optional[str], event_dt: datetime, policy_row) -> Optional[ShiftPolicy]:
+    """
+    Avval xodimga atalgan shift'ni izlaydi (employee_shifts).
+    Topilmasa, global attendance_policies ishlatiladi (legacy fallback).
+    """
+    if employee_id:
+        try:
+            shift_row = fetch_shift_for_employee(cur, employee_id, event_dt.date())
+        except Exception:
+            shift_row = None
+        if shift_row:
+            return shift_row_to_policy(shift_row)
+    return policy_row_to_shift(policy_row)
+
+
+def _previous_day_events(cur, employee_id: Optional[str], event_dt: datetime) -> list[DayEvent]:
+    if not employee_id:
+        return []
+    cur.execute(
+        """
+        SELECT event_timestamp, door_event_type
+        FROM attendance_events
+        WHERE employee_id = %s
+          AND DATE(event_timestamp) = %s
+          AND event_timestamp <= %s
+        ORDER BY event_timestamp ASC
+        """,
+        (employee_id, event_dt.date(), event_dt),
+    )
+    rows = cur.fetchall()
+    return [DayEvent(timestamp=row[0], door_event_type=row[1]) for row in rows]
+
+
 def _resolve_status(cur, door_event_type: str, employee_id: Optional[str], match_status: str, event_dt: datetime, policy_row):
-    if match_status == "unmatched":
-        return "unmatched_employee"
-    if match_status == "ambiguous":
-        return "ambiguous_employee"
-    if policy_row is None:
-        return "entry" if door_event_type == "entry" else "exit"
+    """
+    Pure status logikasini chaqiradi (services.attendance_status.resolve_status).
+    DB bilan ishlash (oldingi event'larni olish, exit'larni normalize qilish) shu yerda.
+    """
+    # Match status muammoli bo'lsa — DB'dan qo'shimcha ma'lumotlar olishga hojat yo'q.
+    if match_status in ("unmatched", "ambiguous") or not employee_id:
+        ctx = StatusContext(
+            door_event_type=door_event_type,
+            match_status=match_status,
+            event_dt=event_dt,
+            shift=None,
+        )
+        return pure_resolve_status(ctx)
 
-    if door_event_type == "entry":
-        if _is_within_lunch(policy_row, event_dt):
-            return "lunch_return"
-        first_entry = _get_first_entry(cur, employee_id, event_dt.date())
-        if first_entry:
-            return "entry"
-        deadline = _combine(
-            event_dt.date(),
-            policy_row[1],
-            event_dt.tzinfo,
-        ) + timedelta(minutes=policy_row[5])
-        return "late" if event_dt > deadline else "on_time"
+    shift = _build_shift_for_event(cur, employee_id, event_dt, policy_row)
+    holiday = fetch_holiday_for(event_dt.date())
+    previous = _previous_day_events(cur, employee_id, event_dt)
 
-    if _is_within_lunch(policy_row, event_dt):
-        return "lunch_out"
+    ctx = StatusContext(
+        door_event_type=door_event_type,
+        match_status=match_status,
+        event_dt=event_dt,
+        shift=shift,
+        is_holiday=holiday is not None,
+        previous_events=previous,
+    )
+    new_status = pure_resolve_status(ctx)
 
-    _normalize_previous_exit_statuses(cur, employee_id, event_dt.date())
-    cutoff = _combine(
-        event_dt.date(),
-        policy_row[2],
-        event_dt.tzinfo,
-    ) - timedelta(minutes=policy_row[6])
-    return "on_time_exit" if event_dt >= cutoff else "early_exit"
+    # Side effect: agar oxirgi 'exit' final-status bo'lsa, oldingilarini 'exit'ga normalize qilamiz.
+    if new_status in ("on_time_exit", "early_exit"):
+        _normalize_previous_exit_statuses(cur, employee_id, event_dt.date())
+
+    return new_status
 
 
 def persist_attendance_event(
@@ -245,15 +297,9 @@ def persist_attendance_event_detailed(
 
             policy_row = fetch_attendance_policy(cur)
             employee_id, normalized_name, match_status = _compute_match(cur, clean_employee_name, card_id)
-            if match_status != "matched" or not employee_id:
-                conn.rollback()
-                return AttendancePersistResult(
-                    created_id=None,
-                    outcome=f"{match_status}_employee",
-                    employee_name=normalized_name,
-                    match_status=match_status,
-                )
 
+            # Eventni har doim saqlaymiz — match_status NULL bo'lsa ham.
+            # Bu HR'ga keyinchalik qo'lda biriktirib qo'yish imkonini beradi.
             cur.execute("SELECT id FROM attendance_events WHERE event_key = %s", (event_key,))
             duplicate = cur.fetchone()
             if duplicate:
@@ -348,6 +394,8 @@ def attach_attendance_picture(event_id: str, picture_path: str):
 
 
 def serialize_attendance_event(row):
+    from services.storage_service import face_capture_url
+
     return {
         "id": str(row[0]),
         "card_id": row[1],
@@ -356,6 +404,7 @@ def serialize_attendance_event(row):
         "status": row[4],
         "match_status": row[5],
         "picture_path": row[6],
+        "picture_url": face_capture_url(row[6]),
         "created_at": str(row[7]),
         "employee": {
             "id": str(row[8]) if row[8] else None,

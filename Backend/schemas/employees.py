@@ -23,6 +23,7 @@ class EmployeeCreate(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
     department_id: str
     position_id: str
+    employee_code: Optional[str] = Field(None, max_length=64, description="Unikal tabel raqami yoki Hikvision card ID")
     is_active: bool = True
 
 
@@ -30,6 +31,7 @@ class EmployeeUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     department_id: Optional[str] = None
     position_id: Optional[str] = None
+    employee_code: Optional[str] = Field(None, max_length=64)
     is_active: Optional[bool] = None
 
 
@@ -76,6 +78,8 @@ class EmployeePositionRef(BaseModel):
 class EmployeeResponse(BaseModel):
     id: str
     full_name: str
+    employee_code: Optional[str] = None
+    photo_url: Optional[str] = None
     is_active: bool
     created_at: str
     department: EmployeeDepartmentRef

@@ -243,7 +243,7 @@ const Layout = () => {
   const visibleNavItems = useMemo(() => {
     if (!me) return [];
     const role = me.role.toLowerCase();
-    if (role === 'admin') return navItems;
+    if (role === 'admin' || role === 'superadmin') return navItems;
     if (role === 'hr') {
       const allowed = new Set([
         '/dashboard',

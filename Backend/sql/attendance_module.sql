@@ -54,9 +54,11 @@ CREATE TABLE IF NOT EXISTS work_permissions (
 
 CREATE TABLE IF NOT EXISTS attendance_event_audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id UUID NOT NULL REFERENCES attendance_events(id) ON DELETE CASCADE,
+    -- event o'chirilganda audit log yo'qolmaydi (SET NULL).
+    -- Snapshot old_values ichida saqlanadi.
+    event_id UUID NULL REFERENCES attendance_events(id) ON DELETE SET NULL,
     action VARCHAR(20) NOT NULL CHECK (action IN ('created', 'updated', 'deleted')),
-    changed_by UUID NOT NULL REFERENCES admins(id),
+    changed_by UUID NULL REFERENCES admins(id) ON DELETE SET NULL,
     old_values JSONB,
     new_values JSONB,
     changed_at TIMESTAMP NOT NULL DEFAULT NOW()

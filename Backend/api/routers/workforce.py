@@ -322,14 +322,31 @@ def create_employee(
         with conn.cursor() as cur:
             ensure_department_exists(cur, data.department_id)
             ensure_position_exists(cur, data.position_id)
+            if data.employee_code:
+                cur.execute(
+                    "SELECT 1 FROM employees WHERE employee_code = %s",
+                    (data.employee_code,),
+                )
+                if cur.fetchone():
+                    raise HTTPException(status_code=409, detail="Employee with this code already exists")
             cur.execute(
                 """
-                INSERT INTO employees (full_name, department_id, position_id, is_active)
-                VALUES (%s, %s, %s, %s)
+                SELECT 1 FROM employees
+                WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s)) AND is_active = TRUE
+                """,
+                (data.full_name,),
+            )
+            if cur.fetchone() and data.is_active:
+                raise HTTPException(status_code=409, detail="Active employee with this full name already exists")
+            cur.execute(
+                """
+                INSERT INTO employees (full_name, employee_code, department_id, position_id, is_active)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
                     data.full_name,
+                    data.employee_code,
                     data.department_id,
                     data.position_id,
                     data.is_active,
@@ -346,7 +363,9 @@ def create_employee(
                     d.id,
                     d.name,
                     p.id,
-                    p.name
+                    p.name,
+                    e.employee_code,
+                    e.photo_url
                 FROM employees e
                 JOIN departments d ON d.id = e.department_id
                 JOIN positions p ON p.id = e.position_id
@@ -411,7 +430,9 @@ def list_employees(
                     d.id,
                     d.name,
                     p.id,
-                    p.name
+                    p.name,
+                    e.employee_code,
+                    e.photo_url
                 FROM employees e
                 JOIN departments d ON d.id = e.department_id
                 JOIN positions p ON p.id = e.position_id
@@ -447,7 +468,9 @@ def get_employee(employee_id: str, user=Depends(require_role(["admin", "hr"]))):
                     d.id,
                     d.name,
                     p.id,
-                    p.name
+                    p.name,
+                    e.employee_code,
+                    e.photo_url
                 FROM employees e
                 JOIN departments d ON d.id = e.department_id
                 JOIN positions p ON p.id = e.position_id
@@ -487,6 +510,15 @@ def update_employee(
             if data.full_name is not None:
                 update_fields.append("full_name = %s")
                 values.append(data.full_name)
+            if data.employee_code is not None:
+                cur.execute(
+                    "SELECT 1 FROM employees WHERE employee_code = %s AND id <> %s",
+                    (data.employee_code, employee_id),
+                )
+                if cur.fetchone():
+                    raise HTTPException(status_code=409, detail="Employee with this code already exists")
+                update_fields.append("employee_code = %s")
+                values.append(data.employee_code)
             if data.is_active is not None:
                 update_fields.append("is_active = %s")
                 values.append(data.is_active)
@@ -518,7 +550,9 @@ def update_employee(
                     d.id,
                     d.name,
                     p.id,
-                    p.name
+                    p.name,
+                    e.employee_code,
+                    e.photo_url
                 FROM employees e
                 JOIN departments d ON d.id = e.department_id
                 JOIN positions p ON p.id = e.position_id

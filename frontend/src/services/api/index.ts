@@ -22,11 +22,35 @@ function readStoredValue(key: string) {
   return localStorage.getItem(key) || sessionStorage.getItem(key);
 }
 
+// Toast spam'ni oldini olish: bir xil xabarni 3 sekund ichida takror chiqarmaydi
+const recentNotifications = new Map<string, number>();
+const NOTIFICATION_DEDUP_WINDOW_MS = 3000;
+
+function shouldNotify(key: string): boolean {
+  const now = Date.now();
+  const last = recentNotifications.get(key);
+  if (last !== undefined && now - last < NOTIFICATION_DEDUP_WINDOW_MS) {
+    return false;
+  }
+  recentNotifications.set(key, now);
+  // Eski yozuvlarni tozalash (xotira o'sib ketmasligi uchun)
+  if (recentNotifications.size > 50) {
+    for (const [k, t] of recentNotifications) {
+      if (now - t > NOTIFICATION_DEDUP_WINDOW_MS) {
+        recentNotifications.delete(k);
+      }
+    }
+  }
+  return true;
+}
+
 function showErrorNotification(error: unknown) {
   if (!axios.isAxiosError(error)) {
+    const msg = String(error);
+    if (!shouldNotify(`generic:${msg}`)) return;
     notification.error({
       message: 'Kutilmagan xato',
-      description: String(error),
+      description: msg,
       placement: 'topRight',
       duration: 4
     });
@@ -44,6 +68,8 @@ function showErrorNotification(error: unknown) {
       (data as { message: string }).message) ||
     error.message ||
     'Noma`lum xato yuz berdi';
+
+  if (!shouldNotify(`${status}:${msg}`)) return;
 
   notification.error({
     message: status ? `Xato (${status})` : 'Network xato',
@@ -98,6 +124,7 @@ export type PositionResponse = Position;
 export type Employee = {
   id: string;
   full_name: string;
+  employee_code?: string | null;
   email?: string | null;
   phone_number?: string | null;
   is_active: boolean;
@@ -154,10 +181,11 @@ export type AttendanceEvent = {
   status: string | null;
   match_status: string | null;
   picture_path: string | null;
+  picture_url: string | null;
   created_at: string;
   employee_id: string | null;
   employee_name: string | null;
-  employee: { full_name: string } | null;
+  employee: { id: string | null; full_name: string } | null;
   door: { id: string; name: string; ip_address: string; event_type: string };
 };
 export type AttendanceEventEnvelope = {
@@ -592,6 +620,27 @@ class ApiService {
     return data;
   }
 
+  async uploadEmployeePhoto(employeeId: string, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const { data } = await this.api.post<{
+      message: string;
+      employee_id: string;
+      filename: string;
+      photo_url: string;
+    }>(`/employees/${employeeId}/photo`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return data;
+  }
+
+  async deleteEmployeePhoto(employeeId: string) {
+    const { data } = await this.api.delete<{ message: string }>(
+      `/employees/${employeeId}/photo`
+    );
+    return data;
+  }
+
   async getEmployee(employeeId: string) {
     const { data } = await this.api.get<EmployeeResponse>(
       `/employees/${employeeId}`
@@ -603,6 +652,7 @@ class ApiService {
     full_name: string;
     department_id: string;
     position_id: string;
+    employee_code?: string | null;
     is_active?: boolean;
   }) {
     const { data } = await this.api.post<EmployeeEnvelope>('/employees', body);
@@ -615,6 +665,7 @@ class ApiService {
       full_name: string;
       department_id: string;
       position_id: string;
+      employee_code: string | null;
       is_active: boolean;
     }>
   ) {
@@ -712,6 +763,7 @@ class ApiService {
     door_id?: string;
     event_type?: string;
     status?: string;
+    match_status?: 'matched' | 'unmatched' | 'ambiguous' | 'unmatched_or_ambiguous';
     date_from?: string;
     date_to?: string;
     sort?: 'event_timestamp' | 'created_at' | 'employee_name' | 'status';
@@ -723,6 +775,28 @@ class ApiService {
         params
       }
     );
+    return data;
+  }
+
+  async linkEventToEmployee(eventId: string, employeeId: string) {
+    const { data } = await this.api.post<AttendanceEventEnvelope>(
+      `/attendance-events/${eventId}/link-employee`,
+      { employee_id: employeeId }
+    );
+    return data.data;
+  }
+
+  async uploadEventPhoto(eventId: string, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const { data } = await this.api.post<{
+      message: string;
+      event_id: string;
+      picture_path: string;
+      picture_url: string;
+    }>(`/attendance-events/${eventId}/photo`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
     return data;
   }
 
@@ -976,7 +1050,346 @@ class ApiService {
     );
     return data;
   }
+
+  // ---------- Productivity / Categories ----------
+  async listCategoryRules(
+    scope: 'app' | 'site',
+    params?: {
+      department_id?: string;
+      category?: 'productive' | 'unproductive' | 'neutral';
+      is_active?: boolean;
+    }
+  ) {
+    const { data } = await this.api.get<{ data: CategoryRule[] }>(
+      `/categories/${scope}`,
+      { params }
+    );
+    return data.data;
+  }
+
+  async createCategoryRule(scope: 'app' | 'site', body: CategoryRuleInput) {
+    const { data } = await this.api.post<{ message: string; data: CategoryRule }>(
+      `/categories/${scope}`,
+      body
+    );
+    return data.data;
+  }
+
+  async updateCategoryRule(
+    scope: 'app' | 'site',
+    ruleId: string,
+    body: Partial<CategoryRuleInput>
+  ) {
+    const { data } = await this.api.patch<{ message: string; data: CategoryRule }>(
+      `/categories/${scope}/${ruleId}`,
+      body
+    );
+    return data.data;
+  }
+
+  async deleteCategoryRule(scope: 'app' | 'site', ruleId: string) {
+    const { data } = await this.api.delete<MessageResponse>(
+      `/categories/${scope}/${ruleId}`
+    );
+    return data;
+  }
+
+  async getProductivityOverview(params: {
+    date_from: string;
+    date_to: string;
+    employee_id?: string;
+    department_id?: string;
+  }) {
+    const { data } = await this.api.get<ProductivityBreakdown>(
+      '/reports/productivity',
+      { params }
+    );
+    return data;
+  }
+
+  async getProductivityByEmployee(params: {
+    date_from: string;
+    date_to: string;
+    department_id?: string;
+  }) {
+    const { data } = await this.api.get<EmployeeProductivityList>(
+      '/reports/productivity-by-employee',
+      { params }
+    );
+    return data;
+  }
+
+  async getProductivityByDepartment(params: {
+    date_from: string;
+    date_to: string;
+  }) {
+    const { data } = await this.api.get<DepartmentProductivityList>(
+      '/reports/productivity-by-department',
+      { params }
+    );
+    return data;
+  }
+
+  async listAppConfig() {
+    const { data } = await this.api.get<{ data: AppConfigItem[] }>('/app-config');
+    return data.data;
+  }
+
+  async updateAppConfig(key: string, value: string, description?: string) {
+    const { data } = await this.api.put<AppConfigItem>(`/app-config/${key}`, {
+      value,
+      description
+    });
+    return data;
+  }
+
+  // ---------- Shifts ----------
+  async listShifts(params?: { is_active?: boolean }) {
+    const { data } = await this.api.get<{ data: Shift[] }>('/shifts', { params });
+    return data.data;
+  }
+
+  async createShift(body: ShiftInput) {
+    const { data } = await this.api.post<{ message: string; data: Shift }>(
+      '/shifts',
+      body
+    );
+    return data.data;
+  }
+
+  async updateShift(shiftId: string, body: Partial<ShiftInput>) {
+    const { data } = await this.api.patch<{ message: string; data: Shift }>(
+      `/shifts/${shiftId}`,
+      body
+    );
+    return data.data;
+  }
+
+  async deleteShift(shiftId: string) {
+    const { data } = await this.api.delete<MessageResponse>(`/shifts/${shiftId}`);
+    return data;
+  }
+
+  async listEmployeeShifts(params?: { employee_id?: string }) {
+    const { data } = await this.api.get<{ data: EmployeeShiftAssignment[] }>(
+      '/employee-shifts',
+      { params }
+    );
+    return data.data;
+  }
+
+  async assignEmployeeShift(body: {
+    employee_id: string;
+    shift_id: string;
+    effective_from: string;
+    effective_to?: string | null;
+  }) {
+    const { data } = await this.api.post<{
+      message: string;
+      data: EmployeeShiftAssignment;
+    }>('/employee-shifts', body);
+    return data.data;
+  }
+
+  // ---------- Holidays ----------
+  async listHolidays(params?: { year?: number; holiday_type?: string }) {
+    const { data } = await this.api.get<{ data: Holiday[] }>('/holidays', {
+      params
+    });
+    return data.data;
+  }
+
+  async createHoliday(body: HolidayInput) {
+    const { data } = await this.api.post<{ message: string; data: Holiday }>(
+      '/holidays',
+      body
+    );
+    return data.data;
+  }
+
+  async updateHoliday(
+    holidayId: string,
+    body: Partial<Omit<HolidayInput, 'holiday_date'>>
+  ) {
+    const { data } = await this.api.patch<{ message: string; data: Holiday }>(
+      `/holidays/${holidayId}`,
+      body
+    );
+    return data.data;
+  }
+
+  async deleteHoliday(holidayId: string) {
+    const { data } = await this.api.delete<MessageResponse>(
+      `/holidays/${holidayId}`
+    );
+    return data;
+  }
+
+  // ---------- Audit ----------
+  async listRecentAudit(params?: { limit?: number; action?: string }) {
+    const { data } = await this.api.get<{ data: AuditEntry[] }>(
+      '/audit/attendance-events/recent',
+      { params }
+    );
+    return data.data;
+  }
+
+  async listAuditForEvent(eventId: string) {
+    const { data } = await this.api.get<{ data: AuditEntry[] }>(
+      `/audit/attendance-events/${eventId}`
+    );
+    return data.data;
+  }
 }
+
+// ============ Productivity types ============
+export type CategoryScope = 'app' | 'site';
+export type CategoryKind = 'productive' | 'unproductive' | 'neutral';
+export type PatternType = 'exact' | 'contains' | 'regex';
+
+export type CategoryRule = {
+  id: string;
+  pattern: string;
+  pattern_type: PatternType;
+  category: CategoryKind;
+  department_id: string | null;
+  label: string | null;
+  priority: number;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CategoryRuleInput = {
+  pattern: string;
+  pattern_type: PatternType;
+  category: CategoryKind;
+  department_id?: string | null;
+  label?: string | null;
+  priority?: number;
+  is_active?: boolean;
+};
+
+export type ProductivityBucket = {
+  name: string;
+  duration_seconds: number;
+  share: number;
+};
+
+export type ProductivityBreakdown = {
+  productive_seconds: number;
+  unproductive_seconds: number;
+  neutral_seconds: number;
+  total_seconds: number;
+  productivity_score: number;
+  by_app: ProductivityBucket[];
+  by_site: ProductivityBucket[];
+  by_label: ProductivityBucket[];
+};
+
+export type EmployeeProductivityRow = {
+  employee: { id: string; full_name: string; department?: { id: string | null; name: string | null } | null };
+  productive_seconds: number;
+  unproductive_seconds: number;
+  neutral_seconds: number;
+  total_seconds: number;
+  productivity_score: number;
+};
+
+export type EmployeeProductivityList = {
+  date_from: string;
+  date_to: string;
+  rows: EmployeeProductivityRow[];
+};
+
+export type DepartmentProductivityRow = {
+  department: { id: string; name: string };
+  employees: number;
+  productive_seconds: number;
+  unproductive_seconds: number;
+  neutral_seconds: number;
+  total_seconds: number;
+  productivity_score: number;
+};
+
+export type DepartmentProductivityList = {
+  date_from: string;
+  date_to: string;
+  rows: DepartmentProductivityRow[];
+};
+
+export type AppConfigItem = {
+  key: string;
+  value: string | null;
+  description: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
+// ============ Shifts ============
+export type Shift = {
+  id: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+  is_overnight: boolean;
+  lunch_start_time: string | null;
+  lunch_end_time: string | null;
+  late_grace_minutes: number;
+  early_leave_grace_minutes: number;
+  work_days: string[];
+  is_active: boolean;
+  created_at?: string;
+};
+
+export type ShiftInput = {
+  name: string;
+  start_time: string;
+  end_time: string;
+  is_overnight?: boolean;
+  lunch_start_time?: string | null;
+  lunch_end_time?: string | null;
+  late_grace_minutes?: number;
+  early_leave_grace_minutes?: number;
+  work_days?: string[];
+  is_active?: boolean;
+};
+
+export type EmployeeShiftAssignment = {
+  id: string;
+  effective_from: string;
+  effective_to: string | null;
+  created_at: string;
+  employee: { id: string; full_name: string };
+  shift: Shift;
+};
+
+// ============ Holidays ============
+export type Holiday = {
+  id: string;
+  date: string;
+  name: string;
+  type: 'public' | 'company' | 'weekend';
+  is_paid: boolean;
+};
+
+export type HolidayInput = {
+  holiday_date: string;
+  name: string;
+  holiday_type?: 'public' | 'company' | 'weekend';
+  is_paid?: boolean;
+};
+
+// ============ Audit ============
+export type AuditEntry = {
+  id: string;
+  event_id: string;
+  action: 'created' | 'updated' | 'deleted';
+  changed_by: { id: string | null; full_name: string | null; username: string | null };
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown> | null;
+  changed_at: string;
+};
 
 const apiService = new ApiService();
 export default apiService;

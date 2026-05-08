@@ -134,6 +134,7 @@ class AttendanceEventResponse(BaseModel):
     status: AttendanceStatus
     match_status: MatchStatus
     picture_path: Optional[str]
+    picture_url: Optional[str] = None
     created_at: str
     employee: AttendanceEventEmployeeRef
     door: AttendanceEventDoorRef

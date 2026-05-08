@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import psycopg2
@@ -76,6 +77,11 @@ def find_employee_matches(cur, employee_name: str):
 
 
 def find_employee_by_card_id(cur, card_id: str):
+    """
+    Card identifikator orqali xodimni topadi. Tartib:
+    1. employee_device_mappings (eski model — bir xodimga bir nechta karta)
+    2. employees.employee_code (yangi model — to'g'ridan-to'g'ri tabel raqami)
+    """
     cur.execute(
         """
         SELECT e.id, e.full_name
@@ -87,13 +93,45 @@ def find_employee_by_card_id(cur, card_id: str):
         """,
         (card_id,),
     )
-    return cur.fetchone()
+    row = cur.fetchone()
+    if row:
+        return row
+
+    # Fallback: employee_code (agar mappings bo'sh bo'lsa)
+    try:
+        cur.execute(
+            """
+            SELECT id, full_name
+            FROM employees
+            WHERE employee_code = %s AND is_active = TRUE
+            LIMIT 1
+            """,
+            (card_id,),
+        )
+        return cur.fetchone()
+    except Exception:
+        # employee_code ustuni hali yaratilmagan bo'lishi mumkin (eski DB)
+        return None
 
 
-def create_employee_from_device(cur, employee_name: str):
+def create_employee_from_device(cur, employee_name: str, card_id: Optional[str] = None):
+    """
+    Hikvision'dan kelgan event asosida xodim yaratadi.
+
+    Smart logika:
+    - "Auto Imported" department va "Unknown" position avtomatik yaratiladi
+    - Agar card_id berilgan bo'lsa, u employee_code'ga yoziladi.
+      Shunda keyingi marta o'sha karta o'qilganida xodim avtomatik topiladi
+      (employee_code orqali). Yana auto-create kerak bo'lmaydi.
+    - Bir xil ismda xodim allaqachon bor bo'lsa (active), uni qaytaradi va
+      kerak bo'lsa employee_code'ni o'rnatib qo'yadi.
+    """
+    from psycopg2.errors import UniqueViolation
+
     clean_name = (employee_name or "").strip()
     if not clean_name:
         return None
+    code = (card_id or "").strip() or None
 
     try:
         cur.execute(
@@ -114,38 +152,70 @@ def create_employee_from_device(cur, employee_name: str):
             """
         )
         position_id = cur.fetchone()[0]
+
+        # Avval mavjud xodimni qidir (ism yoki kod bo'yicha)
+        if code:
+            cur.execute(
+                "SELECT id, full_name FROM employees WHERE employee_code = %s",
+                (code,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return existing
+
         cur.execute(
             """
-            WITH existing AS (
-                SELECT id, full_name
-                FROM employees
-                WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
-                  AND is_active = TRUE
-                LIMIT 1
-            ),
-            inserted AS (
-                INSERT INTO employees (
-                    full_name,
-                    department_id,
-                    position_id,
-                    is_active
-                )
-                SELECT %s, %s, %s, TRUE
-                WHERE NOT EXISTS (SELECT 1 FROM existing)
-                RETURNING id, full_name
-            )
-            SELECT id, full_name FROM inserted
-            UNION ALL
-            SELECT id, full_name FROM existing
+            SELECT id, full_name, employee_code
+            FROM employees
+            WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
+              AND is_active = TRUE
             LIMIT 1
             """,
-            (clean_name, clean_name, department_id, position_id),
+            (clean_name,),
         )
-        result = cur.fetchone()
-        logger.info("New employee created from Hikvision event: %s", clean_name)
-        return result
+        existing = cur.fetchone()
+        if existing:
+            # Bor xodimga code biriktirib qo'yamiz, agar kelmagan bo'lsa
+            if code and not existing[2]:
+                try:
+                    cur.execute(
+                        "UPDATE employees SET employee_code = %s WHERE id = %s",
+                        (code, existing[0]),
+                    )
+                except UniqueViolation:
+                    pass
+            return existing[0], existing[1]
+
+        # Yangi xodim yaratish
+        try:
+            cur.execute(
+                """
+                INSERT INTO employees (
+                    full_name, employee_code, department_id, position_id, is_active
+                )
+                VALUES (%s, %s, %s, %s, TRUE)
+                RETURNING id, full_name
+                """,
+                (clean_name, code, department_id, position_id),
+            )
+            result = cur.fetchone()
+            logger.info(
+                "New employee auto-created from Hikvision event: name=%s code=%s",
+                clean_name, code,
+            )
+            return result
+        except UniqueViolation:
+            # Race condition: parallel insert allaqachon yaratdi
+            cur.execute(
+                "SELECT id, full_name FROM employees WHERE employee_code = %s OR LOWER(TRIM(full_name)) = LOWER(TRIM(%s)) LIMIT 1",
+                (code, clean_name),
+            )
+            return cur.fetchone()
     except Exception as exc:
-        logger.error("Failed to create employee from Hikvision event %s: %s", clean_name, exc)
+        logger.error(
+            "Failed to auto-create employee (name=%s, code=%s): %s",
+            clean_name, code, exc,
+        )
         return None
 
 

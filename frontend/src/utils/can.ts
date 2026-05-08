@@ -15,10 +15,12 @@ function readCachedUserRole(): Role | null {
   }
 }
 
-export function can(moduleKey: keyof ModeratorPermissions, action: keyof CrudPermissions): boolean {
+export function can(
+  moduleKey: keyof ModeratorPermissions,
+  action: keyof CrudPermissions
+): boolean {
   const role = readCachedUserRole();
-  if (role === 'admin') return true;
+  if (role === 'admin' || role === 'superadmin') return true;
   const perms = readCachedModeratorPermissions();
   return !!perms?.[moduleKey]?.[action];
 }
-

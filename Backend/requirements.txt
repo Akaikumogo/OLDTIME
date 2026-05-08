@@ -5,3 +5,6 @@ bcrypt
 PyJWT
 requests
 python-dotenv
+email-validator
+python-multipart
+pytest

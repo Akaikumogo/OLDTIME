@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -32,8 +33,15 @@ from schemas.attendance import (
     WorkPermissionUpdate,
 )
 from schemas.common import MessageResponse
-from services.device_service import parse_datetime_input, serialize_door, serialize_policy
+from services.audit_service import write_audit
+from services.device_service import (
+    fetch_attendance_policy,
+    parse_datetime_input,
+    serialize_door,
+    serialize_policy,
+)
 from services.event_service import (
+    _resolve_status,
     parse_date_only,
     parse_filter_date,
     parse_time_only,
@@ -547,6 +555,11 @@ def list_attendance_events(
     door_id: str | None = None,
     event_type: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
+    match_status: str | None = Query(
+        None,
+        description="Filter by match status: matched | unmatched | ambiguous. "
+                    "Bo'sh yoki 'unmatched_or_ambiguous' qabul qilinadi.",
+    ),
     date_from: str | None = None,
     date_to: str | None = None,
     sort: str = Query("event_timestamp"),
@@ -577,6 +590,14 @@ def list_attendance_events(
     if status_filter:
         filters.append("ae.status = %s")
         params.append(status_filter)
+    if match_status:
+        if match_status == "unmatched_or_ambiguous":
+            filters.append("ae.match_status IN ('unmatched', 'ambiguous')")
+        elif match_status in ("matched", "unmatched", "ambiguous"):
+            filters.append("ae.match_status = %s")
+            params.append(match_status)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid match_status")
 
     start_dt = parse_filter_date(date_from)
     end_dt = parse_filter_date(date_to, end_of_day=True)
@@ -784,40 +805,86 @@ def get_attendance_event(event_id: str, user=Depends(require_role(["admin", "hr"
     return serialize_attendance_event(row)
 
 
+def _capture_event_snapshot(cur, event_id: str) -> Optional[dict]:
+    cur.execute(
+        """
+        SELECT
+            ae.id, ae.door_id, ae.employee_id, ae.employee_name,
+            ae.card_id, ae.serial_no, ae.event_timestamp,
+            ae.door_event_type, ae.status, ae.match_status,
+            ae.picture_path
+        FROM attendance_events ae
+        WHERE ae.id = %s
+        """,
+        (event_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": str(row[0]),
+        "door_id": str(row[1]) if row[1] else None,
+        "employee_id": str(row[2]) if row[2] else None,
+        "employee_name": row[3],
+        "card_id": row[4],
+        "serial_no": row[5],
+        "event_timestamp": str(row[6]) if row[6] else None,
+        "door_event_type": row[7],
+        "status": row[8],
+        "match_status": row[9],
+        "picture_path": row[10],
+    }
+
+
 @router.patch("/attendance-events/{event_id}", response_model=AttendanceEventEnvelope, summary="Update attendance event")
 def update_attendance_event(event_id: str, data: AttendanceEventUpdate, user=Depends(require_role(["admin", "hr"]))):
     update_fields = []
     values = []
 
-    if data.door_id is not None:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id FROM doors WHERE id = %s", (data.door_id,))
-                if not cur.fetchone():
-                    raise HTTPException(status_code=404, detail="Door not found")
-        update_fields.append("door_id = %s")
-        values.append(data.door_id)
-    if data.employee_name is not None:
-        update_fields.append("employee_name = %s")
-        values.append(data.employee_name)
-    if data.card_id is not None:
-        update_fields.append("card_id = %s")
-        values.append(data.card_id)
-    if data.picture_path is not None:
-        update_fields.append("picture_path = %s")
-        values.append(data.picture_path)
-    if data.status is not None:
-        update_fields.append("status = %s")
-        values.append(data.status)
-    if data.event_timestamp is not None:
-        update_fields.append("event_timestamp = %s")
-        values.append(parse_datetime_input(data.event_timestamp))
-
-    if not update_fields:
-        raise HTTPException(status_code=400, detail="Nothing to update")
-
+    # Bitta connection ichida atomik bajaramiz: snapshot, update, recalc, audit
     with get_connection() as conn:
         with conn.cursor() as cur:
+            old_snapshot = _capture_event_snapshot(cur, event_id)
+            if old_snapshot is None:
+                raise HTTPException(status_code=404, detail="Attendance event not found")
+
+            new_door_event_type = old_snapshot["door_event_type"]
+
+            if data.door_id is not None:
+                cur.execute("SELECT id, event_type FROM doors WHERE id = %s", (data.door_id,))
+                door_row = cur.fetchone()
+                if not door_row:
+                    raise HTTPException(status_code=404, detail="Door not found")
+                update_fields.append("door_id = %s")
+                values.append(data.door_id)
+                update_fields.append("door_event_type = %s")
+                values.append(door_row[1])
+                new_door_event_type = door_row[1]
+
+            if data.employee_name is not None:
+                update_fields.append("employee_name = %s")
+                values.append(data.employee_name)
+            if data.card_id is not None:
+                update_fields.append("card_id = %s")
+                values.append(data.card_id)
+            if data.picture_path is not None:
+                update_fields.append("picture_path = %s")
+                values.append(data.picture_path)
+
+            new_event_dt = None
+            if data.event_timestamp is not None:
+                new_event_dt = parse_datetime_input(data.event_timestamp)
+                update_fields.append("event_timestamp = %s")
+                values.append(new_event_dt)
+
+            recalc_status = (data.status is None) and (data.event_timestamp is not None or data.door_id is not None)
+            if data.status is not None:
+                update_fields.append("status = %s")
+                values.append(data.status)
+
+            if not update_fields:
+                raise HTTPException(status_code=400, detail="Nothing to update")
+
             values.append(event_id)
             cur.execute(
                 f"""
@@ -829,23 +896,144 @@ def update_attendance_event(event_id: str, data: AttendanceEventUpdate, user=Dep
                 values,
             )
             updated = cur.fetchone()
+            if not updated:
+                raise HTTPException(status_code=404, detail="Attendance event not found")
+
+            if recalc_status and old_snapshot["employee_id"]:
+                effective_dt = new_event_dt
+                if effective_dt is None and old_snapshot["event_timestamp"]:
+                    effective_dt = parse_datetime_input(old_snapshot["event_timestamp"])
+                if effective_dt is not None:
+                    policy_row = fetch_attendance_policy(cur)
+                    new_status = _resolve_status(
+                        cur,
+                        new_door_event_type,
+                        old_snapshot["employee_id"],
+                        old_snapshot["match_status"] or "matched",
+                        effective_dt,
+                        policy_row,
+                    )
+                    cur.execute(
+                        "UPDATE attendance_events SET status = %s WHERE id = %s",
+                        (new_status, event_id),
+                    )
+
+            new_snapshot = _capture_event_snapshot(cur, event_id)
+            cur.execute(_attendance_select() + " WHERE ae.id = %s", (event_id,))
+            row = cur.fetchone()
             conn.commit()
 
-    if not updated:
-        raise HTTPException(status_code=404, detail="Attendance event not found")
+    try:
+        write_audit(
+            event_id=event_id,
+            action="updated",
+            changed_by=user["user_id"],
+            old_values=old_snapshot,
+            new_values=new_snapshot,
+        )
+    except Exception as exc:
+        # Audit yozuvi muvaffaqiyatsiz bo'lsa, asosiy yangilanish baribir o'tib ketgan
+        print(f"[WARN] Audit log write failed for event {event_id}: {exc}")
+
+    return {"message": "attendance event updated", "data": serialize_attendance_event(row)}
+
+
+@router.post(
+    "/attendance-events/{event_id}/link-employee",
+    response_model=AttendanceEventEnvelope,
+    summary="Manually link an unmatched event to an employee",
+    description=(
+        "Hikvision'dan kelgan, ammo nomi/kartasi avtomatik xodim bilan moslanmagan "
+        "eventni HR shu endpoint orqali ma'lum bir xodimga biriktirib qo'yadi. "
+        "Status policy asosida qaytadan hisoblanadi va audit log yoziladi."
+    ),
+)
+def link_event_to_employee(
+    event_id: str,
+    body: dict,
+    user=Depends(require_role(["admin", "hr"])),
+):
+    employee_id = body.get("employee_id")
+    if not employee_id:
+        raise HTTPException(status_code=400, detail="employee_id is required")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
+            old_snapshot = _capture_event_snapshot(cur, event_id)
+            if old_snapshot is None:
+                raise HTTPException(status_code=404, detail="Attendance event not found")
+
+            cur.execute(
+                "SELECT id, full_name FROM employees WHERE id = %s AND is_active = TRUE",
+                (employee_id,),
+            )
+            emp = cur.fetchone()
+            if not emp:
+                raise HTTPException(status_code=404, detail="Employee not found")
+
+            event_dt = parse_datetime_input(old_snapshot["event_timestamp"])
+            policy_row = fetch_attendance_policy(cur)
+            new_status = _resolve_status(
+                cur,
+                old_snapshot["door_event_type"],
+                str(emp[0]),
+                "matched",
+                event_dt,
+                policy_row,
+            )
+            cur.execute(
+                """
+                UPDATE attendance_events
+                SET employee_id = %s,
+                    employee_name = %s,
+                    match_status = 'matched',
+                    status = %s
+                WHERE id = %s
+                RETURNING id
+                """,
+                (str(emp[0]), emp[1], new_status, event_id),
+            )
+            updated = cur.fetchone()
+            if not updated:
+                raise HTTPException(status_code=404, detail="Attendance event not found")
+            new_snapshot = _capture_event_snapshot(cur, event_id)
             cur.execute(_attendance_select() + " WHERE ae.id = %s", (event_id,))
             row = cur.fetchone()
+            conn.commit()
 
-    return {"message": "attendance event updated", "data": serialize_attendance_event(row)}
+    try:
+        write_audit(
+            event_id=event_id,
+            action="updated",
+            changed_by=user["user_id"],
+            old_values=old_snapshot,
+            new_values=new_snapshot,
+        )
+    except Exception as exc:
+        print(f"[WARN] Audit log write failed for link {event_id}: {exc}")
+
+    return {"message": "attendance event linked", "data": serialize_attendance_event(row)}
 
 
 @router.delete("/attendance-events/{event_id}", response_model=MessageResponse, summary="Delete attendance event")
 def delete_attendance_event(event_id: str, user=Depends(require_role(["admin", "hr"]))):
     with get_connection() as conn:
         with conn.cursor() as cur:
+            old_snapshot = _capture_event_snapshot(cur, event_id)
+            if old_snapshot is None:
+                raise HTTPException(status_code=404, detail="Attendance event not found")
+            # Audit log event_id'ga reference qiladi va ON DELETE CASCADE bor.
+            # Shuning uchun avval audit log yozamiz, keyin event'ni o'chiramiz.
+            try:
+                write_audit(
+                    event_id=event_id,
+                    action="deleted",
+                    changed_by=user["user_id"],
+                    old_values=old_snapshot,
+                    new_values=None,
+                )
+            except Exception as exc:
+                print(f"[WARN] Audit log write failed for delete {event_id}: {exc}")
             cur.execute("DELETE FROM attendance_events WHERE id = %s RETURNING id", (event_id,))
             deleted = cur.fetchone()
             conn.commit()
@@ -860,49 +1048,6 @@ def get_poller_status(request: Request, user=Depends(require_role(["admin", "hr"
     if engine is None:
         return {"running": False, "poll_interval_seconds": 0, "active_doors": 0}
     return engine.status()
-
-
-@router.get("/reports/attendance-summary", response_model=ReportSummaryResponse, summary="Get attendance summary report")
-def get_attendance_summary(
-    date_from: str = Query(...),
-    date_to: str = Query(...),
-    user=Depends(require_role(["admin", "hr"]))
-):
-    start_dt = parse_filter_date(date_from)
-    end_dt = parse_filter_date(date_to, end_of_day=True)
-    if start_dt and end_dt and start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="date_from cannot be greater than date_to")
-
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) as total_events,
-                    COUNT(DISTINCT employee_id) as active_employees,
-                    COUNT(*) FILTER (WHERE status = 'on_time') as on_time,
-                    COUNT(*) FILTER (WHERE status = 'late') as late,
-                    COUNT(*) FILTER (WHERE status = 'early_exit') as early_exit,
-                    COUNT(*) FILTER (WHERE status = 'on_time_exit') as on_time_exit,
-                    COUNT(*) FILTER (WHERE status = 'lunch_out') as lunch_out,
-                    COUNT(*) FILTER (WHERE status = 'lunch_return') as lunch_return
-                FROM attendance_events
-                WHERE event_timestamp >= %s AND event_timestamp <= %s
-                  AND match_status = 'matched'
-                """,
-                (start_dt, end_dt)
-            )
-            row = cur.fetchone()
-            return {
-                "total_events": row[0],
-                "active_employees": row[1],
-                "on_time": row[2],
-                "late": row[3],
-                "early_exit": row[4],
-                "on_time_exit": row[5],
-                "lunch_out": row[6],
-                "lunch_return": row[7]
-            }
 
 
 @router.get("/reports/late-employees", summary="Get late employees report")
