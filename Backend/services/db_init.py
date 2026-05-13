@@ -26,17 +26,26 @@ MIGRATION_FILES = (
 )
 
 
+DEFAULT_SUPERADMIN = {
+    "full_name": "Sarvarbek Xazratov",
+    "username": "superadmin",
+    "email": "sarvarbekred147@gmail.com",
+    "password": "sarvarbek.21",
+    "role": "superadmin",
+}
+
+
 def _read_default_superadmin() -> dict:
     """
-    Default superadmin ma'lumotlari env'dan olinadi. Mavjud bo'lmasa,
-    bootstrap o'tkazilmaydi va admin tizim orqali qo'lda yaratiladi.
+    Default superadmin ma'lumotlari env'dan olinadi. Env'da yo'q bo'lsa,
+    yuqoridagi DEFAULT_SUPERADMIN qiymatlari ishlatiladi.
     """
     return {
-        "full_name": os.getenv("BOOTSTRAP_ADMIN_FULL_NAME", "").strip(),
-        "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", "").strip(),
-        "email": os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip(),
-        "password": os.getenv("BOOTSTRAP_ADMIN_PASSWORD", ""),
-        "role": os.getenv("BOOTSTRAP_ADMIN_ROLE", "superadmin").strip() or "superadmin",
+        "full_name": os.getenv("BOOTSTRAP_ADMIN_FULL_NAME", "").strip() or DEFAULT_SUPERADMIN["full_name"],
+        "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", "").strip() or DEFAULT_SUPERADMIN["username"],
+        "email": os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip() or DEFAULT_SUPERADMIN["email"],
+        "password": os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "") or DEFAULT_SUPERADMIN["password"],
+        "role": os.getenv("BOOTSTRAP_ADMIN_ROLE", "").strip() or DEFAULT_SUPERADMIN["role"],
     }
 
 
@@ -66,7 +75,10 @@ def initialize_database():
 
 def seed_default_superadmin(cur):
     """
-    Bootstrap admin yaratadi (faqat barcha qiymatlar env'da bor bo'lsa).
+    Har safar backend ishga tushganda default superadmin DB'da bormi
+    tekshiradi. Yo'q bo'lsa — yaratadi. Bor bo'lsa — hech narsa qilmaydi
+    (paroli o'zgartirilgan bo'lsa qayta tiklab qo'ymaydi).
+
     Race condition oldini olish uchun admins jadvali LOCK qilinadi.
     """
     bootstrap = _read_default_superadmin()
@@ -74,47 +86,35 @@ def seed_default_superadmin(cur):
     if not all(bootstrap.get(field) for field in required):
         return
 
-    if len(bootstrap["password"]) < 8:
-        print("[WARN] BOOTSTRAP_ADMIN_PASSWORD shorter than 8 chars; skipping seed")
-        return
-
     try:
-        # Race condition oldini olish: jadvalni transaction davomida qulflaymiz
-        cur.execute("LOCK TABLE admins IN SHARE ROW EXCLUSIVE MODE")
-        cur.execute("SELECT COUNT(*) FROM admins")
-        count = cur.fetchone()[0]
-        if count > 0:
-            cur.execute(
-                """
-                UPDATE admins
-                SET role = %s
-                WHERE username = %s OR email = %s
-                """,
-                (bootstrap["role"], bootstrap["username"], bootstrap["email"]),
-            )
-            return
-
         cur.execute(
-            "SELECT 1 FROM admins WHERE username = %s OR email = %s",
-            (bootstrap["username"], bootstrap["email"]),
+            "SELECT 1 FROM admins WHERE email = %s OR username = %s",
+            (bootstrap["email"], bootstrap["username"]),
         )
         if cur.fetchone():
             return
 
         hashed = hash_password(bootstrap["password"])
-        cur.execute(
-            "INSERT INTO admins (full_name, username, email, password_hash, role) VALUES (%s, %s, %s, %s, %s)",
-            (
-                bootstrap["full_name"],
-                bootstrap["username"],
-                bootstrap["email"],
-                hashed,
-                bootstrap["role"],
-            ),
-        )
-        print(f"[INFO] Bootstrap admin seeded: {bootstrap['username']}")
+        try:
+            cur.execute(
+                "INSERT INTO admins (full_name, username, email, password_hash, role) VALUES (%s, %s, %s, %s, %s)",
+                (
+                    bootstrap["full_name"],
+                    bootstrap["username"],
+                    bootstrap["email"],
+                    hashed,
+                    bootstrap["role"],
+                ),
+            )
+            print(
+                f"[INFO] Default superadmin seeded: {bootstrap['email']} "
+                f"(username: {bootstrap['username']})"
+            )
+        except psycopg2.errors.UniqueViolation:
+            # Parallel startup ikkala server bir vaqtda yaratmoqchi bo'ldi
+            return
     except psycopg2.errors.UndefinedTable:
         # Admins jadvali hali yaratilmagan
         return
     except Exception as exc:
-        print(f"[WARN] Bootstrap admin seed skipped: {exc}")
+        print(f"[WARN] Default superadmin seed skipped: {exc}")
