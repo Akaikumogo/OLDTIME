@@ -5,7 +5,7 @@ const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
     /\/+$/,
     ''
-  ) || 'http://localhost:8000';
+  ) || 'http://192.168.0.165:8000';
 
 export const BACKEND_ORIGIN = new URL(API_BASE_URL).origin;
 
@@ -803,7 +803,11 @@ class ApiService {
     door_id?: string;
     event_type?: string;
     status?: string;
-    match_status?: 'matched' | 'unmatched' | 'ambiguous' | 'unmatched_or_ambiguous';
+    match_status?:
+      | 'matched'
+      | 'unmatched'
+      | 'ambiguous'
+      | 'unmatched_or_ambiguous';
     date_from?: string;
     date_to?: string;
     sort?: 'event_timestamp' | 'created_at' | 'employee_name' | 'status';
@@ -1110,10 +1114,10 @@ class ApiService {
   }
 
   async createCategoryRule(scope: 'app' | 'site', body: CategoryRuleInput) {
-    const { data } = await this.api.post<{ message: string; data: CategoryRule }>(
-      `/categories/${scope}`,
-      body
-    );
+    const { data } = await this.api.post<{
+      message: string;
+      data: CategoryRule;
+    }>(`/categories/${scope}`, body);
     return data.data;
   }
 
@@ -1122,10 +1126,10 @@ class ApiService {
     ruleId: string,
     body: Partial<CategoryRuleInput>
   ) {
-    const { data } = await this.api.patch<{ message: string; data: CategoryRule }>(
-      `/categories/${scope}/${ruleId}`,
-      body
-    );
+    const { data } = await this.api.patch<{
+      message: string;
+      data: CategoryRule;
+    }>(`/categories/${scope}/${ruleId}`, body);
     return data.data;
   }
 
@@ -1173,7 +1177,9 @@ class ApiService {
   }
 
   async listAppConfig() {
-    const { data } = await this.api.get<{ data: AppConfigItem[] }>('/app-config');
+    const { data } = await this.api.get<{ data: AppConfigItem[] }>(
+      '/app-config'
+    );
     return data.data;
   }
 
@@ -1187,7 +1193,9 @@ class ApiService {
 
   // ---------- Shifts ----------
   async listShifts(params?: { is_active?: boolean }) {
-    const { data } = await this.api.get<{ data: Shift[] }>('/shifts', { params });
+    const { data } = await this.api.get<{ data: Shift[] }>('/shifts', {
+      params
+    });
     return data.data;
   }
 
@@ -1208,7 +1216,9 @@ class ApiService {
   }
 
   async deleteShift(shiftId: string) {
-    const { data } = await this.api.delete<MessageResponse>(`/shifts/${shiftId}`);
+    const { data } = await this.api.delete<MessageResponse>(
+      `/shifts/${shiftId}`
+    );
     return data;
   }
 
@@ -1330,7 +1340,11 @@ export type ProductivityBreakdown = {
 };
 
 export type EmployeeProductivityRow = {
-  employee: { id: string; full_name: string; department?: { id: string | null; name: string | null } | null };
+  employee: {
+    id: string;
+    full_name: string;
+    department?: { id: string | null; name: string | null } | null;
+  };
   productive_seconds: number;
   unproductive_seconds: number;
   neutral_seconds: number;
@@ -1427,7 +1441,11 @@ export type AuditEntry = {
   id: string;
   event_id: string;
   action: 'created' | 'updated' | 'deleted';
-  changed_by: { id: string | null; full_name: string | null; username: string | null };
+  changed_by: {
+    id: string | null;
+    full_name: string | null;
+    username: string | null;
+  };
   old_values: Record<string, unknown> | null;
   new_values: Record<string, unknown> | null;
   changed_at: string;
