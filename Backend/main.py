@@ -56,6 +56,7 @@ _default_origins = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5173",
+    "http://192.168.0.165:5173",
 ]
 _cors_origins = [
     origin.strip()
