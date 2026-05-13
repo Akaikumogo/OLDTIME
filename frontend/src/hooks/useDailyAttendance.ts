@@ -9,7 +9,10 @@ export function useDailyAttendance(
   employeeName?: string
 ) {
   return useQuery({
-    queryKey: [...dashboardQueryKeys.dailyAttendance(dateFrom, dateTo), employeeName ?? ''],
+    queryKey: [
+      ...dashboardQueryKeys.dailyAttendance(dateFrom, dateTo),
+      employeeName ?? ''
+    ],
     queryFn: () =>
       apiService.listAttendanceDaily({
         page: 1,
@@ -20,6 +23,7 @@ export function useDailyAttendance(
         sort: 'employee_name',
         order: 'asc'
       }),
+    keepPreviousData: true,
     refetchInterval: 30_000
   });
 }

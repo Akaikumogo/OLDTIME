@@ -7,7 +7,11 @@ import type { DashboardData } from '@/features/dashboard/types';
 import { useComputerAnalytics } from './useComputerAnalytics';
 import { useDailyAttendance } from './useDailyAttendance';
 
-export function useDashboardData(dateFrom: string, dateTo: string, employeeName?: string) {
+export function useDashboardData(
+  dateFrom: string,
+  dateTo: string,
+  employeeName?: string
+) {
   const employeesQuery = useQuery({
     queryKey: dashboardQueryKeys.employees(dateFrom),
     queryFn: () =>
@@ -20,7 +24,11 @@ export function useDashboardData(dateFrom: string, dateTo: string, employeeName?
       }),
     refetchInterval: 30_000
   });
-  const dailyAttendanceQuery = useDailyAttendance(dateFrom, dateTo, employeeName);
+  const dailyAttendanceQuery = useDailyAttendance(
+    dateFrom,
+    dateTo,
+    employeeName
+  );
   const computerAnalyticsQuery = useComputerAnalytics(dateFrom, dateTo);
 
   const data = useMemo<DashboardData | null>(() => {
@@ -64,6 +72,10 @@ export function useDashboardData(dateFrom: string, dateTo: string, employeeName?
 
   return {
     data,
+    isInitialLoading:
+      employeesQuery.isInitialLoading ||
+      dailyAttendanceQuery.isInitialLoading ||
+      computerAnalyticsQuery.isInitialLoading,
     isLoading:
       employeesQuery.isLoading ||
       dailyAttendanceQuery.isLoading ||

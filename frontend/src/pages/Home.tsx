@@ -1,14 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Alert, Button, Empty, Result, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import {
-  Clock3,
-  LogIn,
-  LogOut,
-  Monitor,
-  RefreshCw,
-  Users
-} from 'lucide-react';
+import { Clock3, LogIn, LogOut, Monitor, RefreshCw, Users } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DashboardChart } from '@/components/dashboard/DashboardChart';
 import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton';
@@ -16,7 +9,11 @@ import { DailyAttendanceTable } from '@/components/dashboard/DailyAttendanceTabl
 import { EmployeeTimelineDrawer } from '@/components/dashboard/EmployeeTimelineDrawer';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { TopAppsCard } from '@/components/dashboard/TopAppsCard';
-import { DateRangeFilter, useDateRange, type DateRangePreset } from '@/components/filters/DateRangeFilter';
+import {
+  DateRangeFilter,
+  useDateRange,
+  type DateRangePreset
+} from '@/components/filters/DateRangeFilter';
 import type { DashboardDailyRow } from '@/features/dashboard/types';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { useEmployeeTimeline } from '@/hooks/useEmployeeTimeline';
@@ -36,13 +33,23 @@ function getErrorMessage(error: unknown) {
 }
 
 const Home = () => {
-  const [selectedRow, setSelectedRow] = useState<DashboardDailyRow | null>(null);
-  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('today');
+  const [selectedRow, setSelectedRow] = useState<DashboardDailyRow | null>(
+    null
+  );
+  const [dateRangePreset, setDateRangePreset] =
+    useState<DateRangePreset>('today');
   const [attendanceSearch, setAttendanceSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const { from: dateFrom, to: dateTo } = useDateRange(dateRangePreset);
-  const dashboard = useDashboardData(dateFrom, dateTo, debouncedSearch || undefined);
-  const timeline = useEmployeeTimeline(selectedRow?.employee.id ?? null, dateFrom);
+  const dashboard = useDashboardData(
+    dateFrom,
+    dateTo,
+    debouncedSearch || undefined
+  );
+  const timeline = useEmployeeTimeline(
+    selectedRow?.employee.id ?? null,
+    dateFrom
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(attendanceSearch), 400);
@@ -54,7 +61,9 @@ const Home = () => {
     data?.dailyRows
       .filter((row) => row.statuses.includes('late'))
       .map((row) => {
-        const lateMarker = row.markers.find((marker) => marker.status === 'late');
+        const lateMarker = row.markers.find(
+          (marker) => marker.status === 'late'
+        );
         return {
           id: `${row.employee.id}-${row.date}-${lateMarker?.full_time || row.first_entry_full || row.first_entry || ''}`,
           employeeName: row.employee.full_name,
@@ -68,7 +77,9 @@ const Home = () => {
       title: 'Xodim',
       dataIndex: 'employeeName',
       render: (name: string) => (
-        <span className="font-medium text-slate-900 dark:text-white">{name}</span>
+        <span className="font-medium text-slate-900 dark:text-white">
+          {name}
+        </span>
       )
     },
     {
@@ -98,7 +109,8 @@ const Home = () => {
       <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-sm font-medium text-blue-600 dark:text-blue-300">
-            {formatDisplayDate(dateFrom)} {dateFrom !== dateTo ? `- ${formatDisplayDate(dateTo)}` : ''}
+            {formatDisplayDate(dateFrom)}{' '}
+            {dateFrom !== dateTo ? `- ${formatDisplayDate(dateTo)}` : ''}
           </p>
           <h2 className="mt-1 text-2xl font-bold text-slate-950 dark:text-white">
             Davomat va ish faolligi analitikasi
@@ -110,7 +122,10 @@ const Home = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          <DateRangeFilter value={dateRangePreset} onChange={setDateRangePreset} />
+          <DateRangeFilter
+            value={dateRangePreset}
+            onChange={setDateRangePreset}
+          />
           <Button
             icon={<RefreshCw size={16} />}
             loading={dashboard.isFetching}
@@ -121,7 +136,7 @@ const Home = () => {
         </div>
       </div>
 
-      {dashboard.isLoading ? (
+      {dashboard.isInitialLoading ? (
         <DashboardSkeleton />
       ) : dashboard.error ? (
         <Result
