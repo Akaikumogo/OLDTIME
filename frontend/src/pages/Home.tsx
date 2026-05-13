@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Alert, Button, Empty, Result, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -38,9 +38,16 @@ function getErrorMessage(error: unknown) {
 const Home = () => {
   const [selectedRow, setSelectedRow] = useState<DashboardDailyRow | null>(null);
   const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('today');
+  const [attendanceSearch, setAttendanceSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const { from: dateFrom, to: dateTo } = useDateRange(dateRangePreset);
-  const dashboard = useDashboardData(dateFrom, dateTo);
+  const dashboard = useDashboardData(dateFrom, dateTo, debouncedSearch || undefined);
   const timeline = useEmployeeTimeline(selectedRow?.employee.id ?? null, dateFrom);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(attendanceSearch), 400);
+    return () => clearTimeout(timer);
+  }, [attendanceSearch]);
 
   const data = dashboard.data;
   const lateOccurrences: LateOccurrence[] =
@@ -221,6 +228,9 @@ const Home = () => {
           <DailyAttendanceTable
             rows={data.dailyRows}
             onRowClick={(row) => setSelectedRow(row)}
+            search={attendanceSearch}
+            onSearchChange={setAttendanceSearch}
+            loading={dashboard.isFetching}
           />
         </motion.div>
       ) : null}

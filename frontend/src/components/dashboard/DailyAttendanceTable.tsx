@@ -13,21 +13,25 @@ import { secondsBetweenClockTimes, secondsToHuman } from '@/utils/time';
 type DailyAttendanceTableProps = {
   rows: DashboardDailyRow[];
   onRowClick: (row: DashboardDailyRow) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  loading?: boolean;
 };
 
 type PresenceFilter = 'all' | 'inside' | 'entered' | 'exited' | 'incomplete';
 
-export function DailyAttendanceTable({ rows, onRowClick }: DailyAttendanceTableProps) {
-  const [search, setSearch] = useState('');
+export function DailyAttendanceTable({
+  rows,
+  onRowClick,
+  search,
+  onSearchChange,
+  loading
+}: DailyAttendanceTableProps) {
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [presenceFilter, setPresenceFilter] = useState<PresenceFilter>('all');
 
   const filteredRows = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const matchesSearch =
-        !normalizedSearch ||
-        row.employee.full_name.toLowerCase().includes(normalizedSearch);
       const matchesStatus =
         !statusFilter || row.statuses.includes(statusFilter);
       const hasEntry = Boolean(row.first_entry);
@@ -38,9 +42,9 @@ export function DailyAttendanceTable({ rows, onRowClick }: DailyAttendanceTableP
         (presenceFilter === 'entered' && hasEntry) ||
         (presenceFilter === 'exited' && hasExit) ||
         (presenceFilter === 'incomplete' && hasEntry !== hasExit);
-      return matchesSearch && matchesStatus && matchesPresence;
+      return matchesStatus && matchesPresence;
     });
-  }, [presenceFilter, rows, search, statusFilter]);
+  }, [presenceFilter, rows, statusFilter]);
 
   const statusOptions = useMemo(() => {
     const statuses = new Set<string>();
@@ -125,6 +129,7 @@ export function DailyAttendanceTable({ rows, onRowClick }: DailyAttendanceTableP
 
   return (
     <Table
+      loading={loading}
       title={() => (
         <div className="space-y-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -138,7 +143,7 @@ export function DailyAttendanceTable({ rows, onRowClick }: DailyAttendanceTableP
                 placeholder="Xodim qidirish"
                 allowClear
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => onSearchChange(event.target.value)}
               />
               <Select
                 placeholder="Status"

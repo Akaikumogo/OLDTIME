@@ -80,6 +80,7 @@ const AttendanceEvents = () => {
   const [dateFrom, setDateFrom] = useState<string | undefined>();
   const [dateTo, setDateTo] = useState<string | undefined>();
   const [eventTypeFilter, setEventTypeFilter] = useState<string | undefined>();
+  const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [matchFilter, setMatchFilter] = useState<MatchFilter>('all');
   const [search, setSearch] = useState('');
 
@@ -101,6 +102,7 @@ const AttendanceEvents = () => {
       dateFrom,
       dateTo,
       eventTypeFilter,
+      statusFilter,
       matchFilter,
       search
     ],
@@ -111,11 +113,13 @@ const AttendanceEvents = () => {
         date_from: dateFrom,
         date_to: dateTo,
         event_type: eventTypeFilter,
+        status: statusFilter,
         match_status: matchFilter === 'all' ? undefined : matchFilter,
         employee_name: search || undefined,
         sort: 'event_timestamp',
         order: 'desc'
-      })
+      }),
+    refetchInterval: 30_000
   });
 
   const { data: employees } = useQuery({
@@ -376,7 +380,7 @@ const AttendanceEvents = () => {
               />
             </div>
 
-            <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:w-auto xl:grid-cols-[minmax(220px,280px)_160px_160px_150px_auto] xl:items-end">
+            <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:w-auto xl:grid-cols-[minmax(220px,280px)_160px_160px_150px_150px_auto] xl:items-end">
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   Qidiruv
@@ -449,6 +453,27 @@ const AttendanceEvents = () => {
                     { value: 'entry', label: 'Kirish' },
                     { value: 'exit', label: 'Chiqish' }
                   ]}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Holat
+                </label>
+                <Select
+                  size="large"
+                  value={statusFilter}
+                  onChange={(value) => {
+                    resetToFirstPage();
+                    setStatusFilter(value);
+                  }}
+                  placeholder="Hammasi"
+                  allowClear
+                  className="w-full [&_.ant-select-selector]:!rounded-[10px]"
+                  options={Object.entries(STATUS_LABELS).map(([value, label]) => ({
+                    value,
+                    label
+                  }))}
                 />
               </div>
 

@@ -7,7 +7,7 @@ import type { DashboardData } from '@/features/dashboard/types';
 import { useComputerAnalytics } from './useComputerAnalytics';
 import { useDailyAttendance } from './useDailyAttendance';
 
-export function useDashboardData(dateFrom: string, dateTo: string) {
+export function useDashboardData(dateFrom: string, dateTo: string, employeeName?: string) {
   const employeesQuery = useQuery({
     queryKey: dashboardQueryKeys.employees(dateFrom),
     queryFn: () =>
@@ -17,9 +17,10 @@ export function useDashboardData(dateFrom: string, dateTo: string) {
         is_active: true,
         sort: 'name',
         order: 'asc'
-      })
+      }),
+    refetchInterval: 30_000
   });
-  const dailyAttendanceQuery = useDailyAttendance(dateFrom, dateTo);
+  const dailyAttendanceQuery = useDailyAttendance(dateFrom, dateTo, employeeName);
   const computerAnalyticsQuery = useComputerAnalytics(dateFrom, dateTo);
 
   const data = useMemo<DashboardData | null>(() => {
