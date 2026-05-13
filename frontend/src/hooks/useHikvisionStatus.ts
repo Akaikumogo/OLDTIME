@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE_URL } from '../services/api';
 
 interface RecentEvent {
   timestamp: string;
@@ -33,7 +34,7 @@ interface HikvisionStatus {
   recent_events: RecentEvent[];
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.0.165:8000';
+const API_URL = API_BASE_URL;
 
 export function useHikvisionStatus(pollInterval: number = 5000) {
   const [status, setStatus] = useState<HikvisionStatus | null>(null);
