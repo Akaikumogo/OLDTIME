@@ -33,7 +33,7 @@ interface HikvisionStatus {
   recent_events: RecentEvent[];
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.0.165:8000';
 
 export function useHikvisionStatus(pollInterval: number = 5000) {
   const [status, setStatus] = useState<HikvisionStatus | null>(null);
