@@ -6,9 +6,9 @@ import { motion } from 'motion/react';
 import { DashboardChart } from '@/components/dashboard/DashboardChart';
 import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton';
 import { DailyAttendanceTable } from '@/components/dashboard/DailyAttendanceTable';
-import { EmployeeTimelineDrawer } from '@/components/dashboard/EmployeeTimelineDrawer';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { TopAppsCard } from '@/components/dashboard/TopAppsCard';
+import { EmployeeLiveLocationPanel } from '@/components/camera/EmployeeLiveLocationPanel';
 import {
   DateRangeFilter,
   useDateRange,
@@ -16,7 +16,6 @@ import {
 } from '@/components/filters/DateRangeFilter';
 import type { DashboardDailyRow } from '@/features/dashboard/types';
 import { useDashboardData } from '@/hooks/useDashboardData';
-import { useEmployeeTimeline } from '@/hooks/useEmployeeTimeline';
 import { formatDisplayDate } from '@/utils/date';
 import { secondsToHuman } from '@/utils/time';
 
@@ -45,10 +44,6 @@ const Home = () => {
     dateFrom,
     dateTo,
     debouncedSearch || undefined
-  );
-  const timeline = useEmployeeTimeline(
-    selectedRow?.employee.id ?? null,
-    dateFrom
   );
 
   useEffect(() => {
@@ -250,12 +245,9 @@ const Home = () => {
         </motion.div>
       ) : null}
 
-      <EmployeeTimelineDrawer
+      <EmployeeLiveLocationPanel
         open={Boolean(selectedRow)}
-        date={dateFrom}
-        row={selectedRow}
-        timeline={timeline.data ?? null}
-        loading={timeline.isFetching}
+        employeeId={selectedRow?.employee.id ?? null}
         onClose={() => setSelectedRow(null)}
       />
     </div>

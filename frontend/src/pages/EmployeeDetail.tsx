@@ -1,4 +1,4 @@
-import { Avatar, Button, Empty, Result, Spin, Table, Tag } from 'antd';
+import { Avatar, Button, Empty, Result, Select, Spin, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   ArrowLeft,
@@ -9,18 +9,22 @@ import {
   UserCircle2,
   type LucideIcon
 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import apiService, {
   BACKEND_ORIGIN,
   type AttendanceEvent,
   type ComputerActivity,
-  type EmployeeTimelineComputerActivity
+  type EmployeeTimelineComputerActivity,
+  type Room
 } from '@/services/api';
 import { DateRangeFilter, useDateRange, type DateRangePreset } from '@/components/filters/DateRangeFilter';
 import { useState } from 'react';
 import { getTodayISO, formatDateTime, formatDisplayDate } from '@/utils/date';
 import { secondsToHuman } from '@/utils/time';
+import { EmployeeCameraGrid } from '@/components/camera/EmployeeCameraGrid';
+import { ProductivityBreakdown } from '@/components/camera/ProductivityBreakdown';
+import { ZoneTimeline } from '@/components/camera/ZoneTimeline';
 
 const buildPhotoUrl = (raw?: string | null): string | undefined => {
   if (!raw) return undefined;
@@ -98,6 +102,7 @@ const timelineActivityColumns: ColumnsType<EmployeeTimelineComputerActivity> = [
 const EmployeeDetail = () => {
   const { employeeId } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [rangePreset, setRangePreset] = useState<DateRangePreset>('month');
   const { from: dateFrom, to: dateTo } = useDateRange(rangePreset);
   const today = getTodayISO();
@@ -140,6 +145,51 @@ const EmployeeDetail = () => {
     queryKey: ['employee-detail-timeline', employeeId, today],
     queryFn: () => apiService.getEmployeeTimeline({ employee_id: employeeId || '', date: today }),
     enabled: Boolean(employeeId)
+  });
+
+  const liveLocationQuery = useQuery({
+    queryKey: ['employee-live-location', employeeId],
+    queryFn: () => apiService.getEmployeeLiveLocation(employeeId || ''),
+    enabled: Boolean(employeeId),
+    refetchInterval: 5_000
+  });
+
+  const locationTimelineQuery = useQuery({
+    queryKey: ['employee-location-timeline', employeeId],
+    queryFn: () => apiService.getEmployeeLocationTimeline(employeeId || '', 80),
+    enabled: Boolean(employeeId),
+    refetchInterval: 15_000
+  });
+
+  const cameraProductivityQuery = useQuery({
+    queryKey: ['employee-camera-productivity', employeeId, today],
+    queryFn: () =>
+      apiService.getEmployeeCameraProductivity({
+        employee_id: employeeId || '',
+        date_from: today,
+        date_to: today
+      }),
+    enabled: Boolean(employeeId),
+    refetchInterval: 30_000
+  });
+
+  const roomsQuery = useQuery({
+    queryKey: ['rooms-for-employee-detail'],
+    queryFn: () => apiService.listRooms()
+  });
+
+  const assignRoomMutation = useMutation({
+    mutationFn: (roomId: string) =>
+      apiService.assignEmployeeRoom(employeeId || '', roomId),
+    onSuccess: () => {
+      message.success('Xodim xonaga biriktirildi');
+      void queryClient.invalidateQueries({
+        queryKey: ['employee-live-location', employeeId]
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['employee-camera-views', employeeId]
+      });
+    }
   });
 
   if (!employeeId) {
@@ -210,6 +260,51 @@ const EmployeeDetail = () => {
           </div>
         </section>
 
+        <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-slate-950 dark:text-white">
+                Live camera
+              </h3>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Tag color={liveLocationQuery.data?.is_visible ? 'green' : 'red'}>
+                  {liveLocationQuery.data?.inferred
+                    ? 'Inferred'
+                    : liveLocationQuery.data?.is_visible
+                      ? 'Visible'
+                      : 'Not visible'}
+                </Tag>
+                {liveLocationQuery.data?.active_zone ? (
+                  <Tag color="blue">{liveLocationQuery.data.active_zone.name}</Tag>
+                ) : null}
+                {liveLocationQuery.data?.active_camera ? (
+                  <Tag>{liveLocationQuery.data.active_camera.name}</Tag>
+                ) : null}
+              </div>
+            </div>
+            <div className="min-w-[280px]">
+              <Select
+                className="w-full"
+                placeholder="Assigned room"
+                value={liveLocationQuery.data?.assigned_room?.id}
+                loading={roomsQuery.isFetching || assignRoomMutation.isPending}
+                onChange={(roomId: string) => assignRoomMutation.mutate(roomId)}
+                options={(roomsQuery.data ?? []).map((room: Room) => ({
+                  value: room.id,
+                  label: room.name
+                }))}
+              />
+            </div>
+          </div>
+
+          <EmployeeCameraGrid
+            employeeId={employeeId}
+            liveLocation={liveLocationQuery.data ?? null}
+          />
+
+          <ProductivityBreakdown data={cameraProductivityQuery.data ?? null} />
+        </section>
+
         <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950">
             <h3 className="text-base font-semibold text-slate-950 dark:text-white">
@@ -267,6 +362,13 @@ const EmployeeDetail = () => {
             pagination={{ pageSize: 10 }}
             locale={{ emptyText: <Empty description="Kompyuter activity topilmadi" /> }}
           />
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950">
+          <h3 className="mb-4 text-base font-semibold text-slate-950 dark:text-white">
+            Camera movement
+          </h3>
+          <ZoneTimeline items={locationTimelineQuery.data ?? []} />
         </section>
       </div>
     </div>

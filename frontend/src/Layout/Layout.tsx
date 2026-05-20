@@ -8,6 +8,7 @@ import {
   Briefcase,
   Building2,
   CalendarDays,
+  Camera,
   Clock,
   ClipboardList,
   DoorOpen,
@@ -16,9 +17,11 @@ import {
   Languages,
   LayoutDashboard,
   LogOut,
+  MapPin,
   Maximize2,
   Minimize2,
   Monitor,
+  Radio,
   Users
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -68,6 +71,30 @@ const navItems: {
     path: '/computers',
     label: { uz: 'Computers', en: 'Computers', ru: 'Компьютерлар' },
     icon: Monitor
+  },
+  {
+    path: '/cameras',
+    label: { uz: 'Cameras', en: 'Cameras', ru: 'Камеры' },
+    icon: Camera
+  },
+  {
+    path: '/zones',
+    label: { uz: 'Zones', en: 'Zones', ru: 'Зоны' },
+    icon: MapPin
+  },
+  {
+    path: '/rooms',
+    label: { uz: 'Rooms', en: 'Rooms', ru: 'Комнаты' },
+    icon: Building2
+  },
+  {
+    path: '/realtime-monitoring',
+    label: {
+      uz: 'Realtime',
+      en: 'Realtime',
+      ru: 'Realtime'
+    },
+    icon: Radio
   },
   {
     path: '/computer-activity',
@@ -252,6 +279,10 @@ const Layout = () => {
         '/positions',
         '/doors',
         '/computers',
+        '/cameras',
+        '/zones',
+        '/rooms',
+        '/realtime-monitoring',
         '/computer-activity',
         '/attendance-events',
         '/daily-attendance',

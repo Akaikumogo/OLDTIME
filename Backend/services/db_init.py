@@ -15,6 +15,7 @@ SQL_FILES = (
     "attendance_module.sql",
     "computer_monitoring.sql",
     "productivity_module.sql",
+    "ai_camera_tracking.sql",
 )
 
 MIGRATION_FILES = (

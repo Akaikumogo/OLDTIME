@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance } from 'axios';
 import { notification } from 'antd';
 
-const API_BASE_URL: string =
+export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
     /\/+$/,
     ''
@@ -1292,6 +1292,174 @@ class ApiService {
     );
     return data.data;
   }
+
+  // ---------- AI Camera Tracking ----------
+  getEmployeeLocationWebSocketUrl() {
+    const token = readStoredValue(TOKEN_KEYS.access) || '';
+    const wsOrigin = BACKEND_ORIGIN.replace(/^http/i, 'ws');
+    return `${wsOrigin}/ws/employee-location?token=${encodeURIComponent(token)}`;
+  }
+
+  async listZones() {
+    const { data } = await this.api.get<{ data: Zone[] }>('/zones');
+    return data.data;
+  }
+
+  async createZone(body: ZoneInput) {
+    const { data } = await this.api.post<{ message: string; data: Zone }>(
+      '/zones',
+      body
+    );
+    return data.data;
+  }
+
+  async updateZone(zoneId: string, body: Partial<ZoneInput>) {
+    const { data } = await this.api.patch<{ message: string; data: Zone }>(
+      `/zones/${zoneId}`,
+      body
+    );
+    return data.data;
+  }
+
+  async deleteZone(zoneId: string) {
+    const { data } = await this.api.delete<MessageResponse>(`/zones/${zoneId}`);
+    return data;
+  }
+
+  async listRooms() {
+    const { data } = await this.api.get<{ data: Room[] }>('/rooms');
+    return data.data;
+  }
+
+  async createRoom(body: RoomInput) {
+    const { data } = await this.api.post<{ message: string; data: Room }>(
+      '/rooms',
+      body
+    );
+    return data.data;
+  }
+
+  async updateRoom(roomId: string, body: Partial<RoomInput>) {
+    const { data } = await this.api.patch<{ message: string; data: Room }>(
+      `/rooms/${roomId}`,
+      body
+    );
+    return data.data;
+  }
+
+  async deleteRoom(roomId: string) {
+    const { data } = await this.api.delete<MessageResponse>(`/rooms/${roomId}`);
+    return data;
+  }
+
+  async listCameras(params?: {
+    page?: number;
+    limit?: number;
+    zone_id?: string;
+    room_id?: string;
+    status?: CameraStatus;
+  }) {
+    const { data } = await this.api.get<CameraListResponse>('/cameras', {
+      params
+    });
+    return data;
+  }
+
+  async createCamera(body: CameraInput) {
+    const { data } = await this.api.post<{ message: string; data: Camera }>(
+      '/cameras',
+      body
+    );
+    return data.data;
+  }
+
+  async updateCamera(cameraId: string, body: Partial<CameraInput>) {
+    const { data } = await this.api.patch<{ message: string; data: Camera }>(
+      `/cameras/${cameraId}`,
+      body
+    );
+    return data.data;
+  }
+
+  async deleteCamera(cameraId: string) {
+    const { data } = await this.api.delete<MessageResponse>(
+      `/cameras/${cameraId}`
+    );
+    return data;
+  }
+
+  async testCamera(cameraId: string) {
+    const { data } = await this.api.post<CameraTestResponse>(
+      `/cameras/${cameraId}/test`
+    );
+    return data;
+  }
+
+  async snapshotCamera(cameraId: string) {
+    const { data } = await this.api.post<CameraTestResponse>(
+      `/cameras/${cameraId}/snapshot`
+    );
+    return data;
+  }
+
+  async talkCamera(cameraId: string, action: 'start' | 'stop') {
+    const { data } = await this.api.post<CameraTalkResponse>(
+      `/cameras/${cameraId}/talk`,
+      { action }
+    );
+    return data;
+  }
+
+  async assignEmployeeRoom(employeeId: string, assignedRoomId: string) {
+    const { data } = await this.api.put<EmployeeCameraAssignment>(
+      `/employees/${employeeId}/room-assignment`,
+      { assigned_room_id: assignedRoomId }
+    );
+    return data;
+  }
+
+  async getEmployeeLiveLocation(employeeId: string) {
+    const { data } = await this.api.get<EmployeeLiveLocation>(
+      `/employees/${employeeId}/live-location`
+    );
+    return data;
+  }
+
+  async getEmployeeCameraViews(employeeId: string) {
+    const { data } = await this.api.get<EmployeeCameraViews>(
+      `/employees/${employeeId}/camera-views`
+    );
+    return data;
+  }
+
+  async getEmployeeLocationTimeline(employeeId: string, limit = 100) {
+    const { data } = await this.api.get<{ data: LocationTimelineItem[] }>(
+      `/employees/${employeeId}/location-timeline`,
+      { params: { limit } }
+    );
+    return data.data;
+  }
+
+  async getEmployeeCameraProductivity(params: {
+    employee_id: string;
+    date_from: string;
+    date_to: string;
+  }) {
+    const { employee_id, ...query } = params;
+    const { data } = await this.api.get<CameraProductivityBreakdown>(
+      `/employees/${employee_id}/camera-productivity`,
+      { params: query }
+    );
+    return data;
+  }
+
+  async listEmployeeLocationStates(params?: { page?: number; limit?: number }) {
+    const { data } = await this.api.get<{ data: EmployeeLiveLocation[] }>(
+      '/employee-location-states',
+      { params }
+    );
+    return data.data;
+  }
 }
 
 // ============ Productivity types ============
@@ -1449,6 +1617,217 @@ export type AuditEntry = {
   old_values: Record<string, unknown> | null;
   new_values: Record<string, unknown> | null;
   changed_at: string;
+};
+
+// ============ AI Camera Tracking ============
+export type ZoneType =
+  | 'WORK_ROOM'
+  | 'CORRIDOR'
+  | 'REST_ZONE'
+  | 'MEETING_ROOM'
+  | 'ENTRANCE'
+  | 'EXIT'
+  | 'UNKNOWN';
+
+export type CameraStatus =
+  | 'online'
+  | 'offline'
+  | 'error'
+  | 'testing'
+  | 'unknown';
+
+export type DetectionType = 'FACE' | 'BODY' | 'FACE_BODY';
+
+export type Zone = {
+  id: string;
+  name: string;
+  type: ZoneType;
+  productivity_weight: number;
+  timeout_seconds: number;
+  created_at: string;
+  camera_count: number;
+};
+
+export type ZoneInput = {
+  name: string;
+  type: ZoneType;
+  productivity_weight?: number;
+  timeout_seconds?: number;
+};
+
+export type CameraMini = {
+  id: string;
+  name: string;
+  ip: string;
+  status: CameraStatus;
+  zone_id: string;
+  zone_name: string;
+  has_audio: boolean;
+  has_speaker: boolean;
+  is_primary: boolean;
+  view_position?: string | null;
+  stream_url: string;
+};
+
+export type RoomCameraInput = {
+  camera_id: string;
+  is_primary?: boolean;
+  view_position?: string | null;
+};
+
+export type Room = {
+  id: string;
+  name: string;
+  department_id?: string | null;
+  department_name?: string | null;
+  floor?: string | null;
+  description?: string | null;
+  created_at: string;
+  cameras: CameraMini[];
+};
+
+export type RoomInput = {
+  name: string;
+  department_id?: string | null;
+  floor?: string | null;
+  description?: string | null;
+  cameras?: RoomCameraInput[];
+};
+
+export type Camera = {
+  id: string;
+  name: string;
+  ip: string;
+  username: string;
+  password_configured: boolean;
+  rtsp_main_url: string;
+  rtsp_sub_url?: string | null;
+  isapi_base_url?: string | null;
+  zone_id: string;
+  zone_name: string;
+  zone_type: ZoneType;
+  room_id?: string | null;
+  room_name?: string | null;
+  has_audio: boolean;
+  has_speaker: boolean;
+  status: CameraStatus;
+  last_checked_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  stream_url: string;
+  audio_url: string;
+};
+
+export type CameraInput = {
+  name: string;
+  ip: string;
+  username: string;
+  password?: string;
+  rtsp_main_url: string;
+  rtsp_sub_url?: string | null;
+  isapi_base_url?: string | null;
+  zone_id: string;
+  room_id?: string | null;
+  has_audio?: boolean;
+  has_speaker?: boolean;
+  status?: CameraStatus;
+};
+
+export type CameraListResponse = {
+  meta: { page: number; limit: number; total: number };
+  data: Camera[];
+};
+
+export type CameraTestResponse = {
+  camera_id: string;
+  status: CameraStatus;
+  message: string;
+  snapshot_url?: string | null;
+  has_audio: boolean;
+  has_speaker: boolean;
+};
+
+export type CameraTalkResponse = {
+  camera_id: string;
+  status: string;
+  message: string;
+  talkback_url?: string | null;
+};
+
+export type EmployeeCameraAssignment = {
+  id: string;
+  employee_id: string;
+  assigned_room_id: string;
+  assigned_camera_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  room: Room;
+};
+
+export type EmployeeLiveLocationEvent = {
+  employee_id: string;
+  active_camera_id?: string | null;
+  active_zone_id?: string | null;
+  assigned_camera_id?: string | null;
+  is_visible: boolean;
+  inferred: boolean;
+  last_seen_at?: string | null;
+  detection_type?: DetectionType | null;
+  confidence?: number | null;
+};
+
+export type EmployeeLiveLocation = EmployeeLiveLocationEvent & {
+  employee: {
+    id: string;
+    full_name: string;
+    employee_code?: string | null;
+    department?: { id?: string | null; name?: string | null };
+    position?: { id?: string | null; name?: string | null };
+  };
+  active_camera?: Camera | null;
+  active_zone?: Zone | null;
+  active_room?: Room | null;
+  assigned_room?: Room | null;
+  assigned_cameras: CameraMini[];
+  inferred_zone_id?: string | null;
+  updated_at?: string | null;
+};
+
+export type EmployeeCameraViews = {
+  employee_id: string;
+  active_camera?: Camera | null;
+  assigned_room_camera?: Camera | null;
+  assigned_room_cameras: CameraMini[];
+};
+
+export type LocationTimelineItem = {
+  id: string;
+  camera_id: string;
+  camera_name: string;
+  zone_id: string;
+  zone_name: string;
+  zone_type: ZoneType;
+  room_id?: string | null;
+  room_name?: string | null;
+  detection_type: DetectionType;
+  confidence: number;
+  track_id: string;
+  seen_at: string;
+  disappeared_at?: string | null;
+  duration_seconds?: number | null;
+  snapshot_path?: string | null;
+};
+
+export type CameraProductivityBreakdown = {
+  assigned_room_visible_seconds: number;
+  work_zone_visible_seconds: number;
+  rest_zone_seconds: number;
+  corridor_seconds: number;
+  unknown_seconds: number;
+  not_visible_seconds: number;
+  inferred_zone_seconds: number;
+  productivity_score: number;
 };
 
 const apiService = new ApiService();

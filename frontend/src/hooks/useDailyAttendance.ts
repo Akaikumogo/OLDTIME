@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import apiService from '@/services/api';
 import { DASHBOARD_LIMITS } from '@/features/dashboard/constants';
 import { dashboardQueryKeys } from '@/features/dashboard/queryKeys';
@@ -23,7 +23,7 @@ export function useDailyAttendance(
         sort: 'employee_name',
         order: 'asc'
       }),
-    keepPreviousData: true,
+    placeholderData: keepPreviousData,
     refetchInterval: 30_000
   });
 }

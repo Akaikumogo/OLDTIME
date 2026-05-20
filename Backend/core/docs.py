@@ -20,6 +20,10 @@ tags_metadata = [
         "description": "Configurable productivity categories (apps/sites) and analytics reports.",
     },
     {
+        "name": "AI Camera Tracking",
+        "description": "Zones, rooms, RTSP camera inventory, live employee location and camera productivity.",
+    },
+    {
         "name": "Shifts",
         "description": "Work shifts (overnight included) and employee-shift assignments.",
     },

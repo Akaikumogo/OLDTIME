@@ -26,6 +26,10 @@ const WorkPermissions = lazy(() => import('./pages/WorkPermissions'));
 const DailyAttendance = lazy(() => import('./pages/DailyAttendance'));
 const ComputerActivity = lazy(() => import('./pages/ComputerActivity'));
 const Computers = lazy(() => import('./pages/Computers'));
+const Cameras = lazy(() => import('./pages/Cameras'));
+const Zones = lazy(() => import('./pages/Zones'));
+const Rooms = lazy(() => import('./pages/Rooms'));
+const RealtimeMonitoring = lazy(() => import('./pages/RealtimeMonitoring'));
 const Doors = lazy(() => import('./pages/Doors'));
 const Positions = lazy(() => import('./pages/Positions'));
 const Admins = lazy(() => import('./pages/Admins'));
@@ -94,6 +98,22 @@ export const routes: RouteObject[] = [
           {
             path: 'computers',
             element: withSuspense(Computers)
+          },
+          {
+            path: 'cameras',
+            element: withSuspense(Cameras)
+          },
+          {
+            path: 'zones',
+            element: withSuspense(Zones)
+          },
+          {
+            path: 'rooms',
+            element: withSuspense(Rooms)
+          },
+          {
+            path: 'realtime-monitoring',
+            element: withSuspense(RealtimeMonitoring)
           },
           {
             path: 'doors',
