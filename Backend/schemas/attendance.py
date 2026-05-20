@@ -15,6 +15,8 @@ AttendanceStatus = Literal[
     "on_time_exit",
     "unmatched_employee",
     "ambiguous_employee",
+    "holiday",
+    "weekend",
 ]
 MatchStatus = Literal["matched", "unmatched", "ambiguous"]
 PermissionStatus = Literal["pending", "approved", "rejected"]
