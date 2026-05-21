@@ -20,8 +20,16 @@ const GRID_CLASS: Record<number, string> = {
   6: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6',
 };
 
+type StreamProfile = 'main' | 'sub';
+
+const STREAM_PROFILE_OPTIONS: { value: StreamProfile; label: string }[] = [
+  { value: 'main', label: 'Sifatli' },
+  { value: 'sub', label: 'Tezkor' },
+];
+
 export default function CameraMonitoring() {
   const [cols, setCols] = useState(3);
+  const [streamProfile, setStreamProfile] = useState<StreamProfile>('main');
   const [zoneId, setZoneId] = useState<string | undefined>();
   const [roomId, setRoomId] = useState<string | undefined>();
 
@@ -97,6 +105,12 @@ export default function CameraMonitoring() {
             onChange={setCols}
             options={COLS_OPTIONS}
           />
+          <Select
+            style={{ width: 120 }}
+            value={streamProfile}
+            onChange={setStreamProfile}
+            options={STREAM_PROFILE_OPTIONS}
+          />
           <Button
             icon={<RefreshCw size={15} />}
             loading={camerasQuery.isFetching}
@@ -126,6 +140,7 @@ export default function CameraMonitoring() {
                 <CameraGridItem
                   key={camera.id}
                   camera={camera}
+                  profile={streamProfile}
                   unknownDetection={unknownByCamera.get(camera.id) ?? null}
                 />
               ))}

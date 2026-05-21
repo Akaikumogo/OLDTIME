@@ -6,13 +6,14 @@ import { CameraStatusBadge } from './CameraStatusBadge';
 import { formatDateTime } from '@/utils/date';
 
 type CameraLike = Camera | CameraMini;
+type StreamProfile = 'main' | 'sub';
 
-function tokenizedUrl(path: string) {
+function tokenizedUrl(path: string, profile: StreamProfile) {
   const token =
     localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
   const base = path.startsWith('http') ? path : `${BACKEND_ORIGIN}${path}`;
   const url = new URL(base);
-  url.searchParams.set('profile', 'sub');
+  url.searchParams.set('profile', profile);
   url.searchParams.set('format', 'mp4');
   if (token) {
     url.searchParams.set('token', token);
@@ -27,9 +28,10 @@ function getRoomName(camera: CameraLike) {
 type Props = {
   camera: CameraLike;
   unknownDetection?: LiveUnknownDetection | null;
+  profile?: StreamProfile;
 };
 
-export function CameraGridItem({ camera, unknownDetection }: Props) {
+export function CameraGridItem({ camera, unknownDetection, profile = 'main' }: Props) {
   const [videoError, setVideoError] = useState(false);
   const [listening, setListening] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -53,8 +55,8 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
 
   const streamSrc = useMemo(() => {
     if (!camera?.stream_url) return null;
-    return tokenizedUrl(camera.stream_url);
-  }, [camera.stream_url]);
+    return tokenizedUrl(camera.stream_url, profile);
+  }, [camera.stream_url, profile]);
 
   const handleFullscreen = async () => {
     await containerRef.current?.requestFullscreen?.();
