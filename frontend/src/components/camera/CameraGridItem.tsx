@@ -101,7 +101,7 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
           }`}
         >
           {'has_audio' in camera && camera.has_audio ? (
-            <Tooltip title={listening ? 'Sesni o'chirish' : 'Sesni yoqish'}>
+            <Tooltip title={listening ? "Sesni o'chirish" : 'Sesni yoqish'}>
               <button
                 className="flex h-6 w-6 items-center justify-center rounded bg-black/50 text-white hover:bg-black/80"
                 onClick={() => setListening((v) => !v)}
