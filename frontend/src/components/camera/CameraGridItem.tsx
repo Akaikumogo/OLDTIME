@@ -11,8 +11,13 @@ function tokenizedUrl(path: string) {
   const token =
     localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
   const base = path.startsWith('http') ? path : `${BACKEND_ORIGIN}${path}`;
-  if (!token) return base;
-  return `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  const url = new URL(base);
+  url.searchParams.set('profile', 'sub');
+  url.searchParams.set('format', 'mp4');
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+  return url.toString();
 }
 
 function getRoomName(camera: CameraLike) {
