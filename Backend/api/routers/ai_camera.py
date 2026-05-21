@@ -1,7 +1,10 @@
 import os
+import re
+from urllib.parse import quote, urljoin
 
+import requests
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import Response, StreamingResponse
 
 from db import get_connection
 from schemas.ai_camera import (
@@ -533,9 +536,8 @@ def talk_camera(camera_id: str, data: CameraTalkRequest, user=Depends(require_ro
 
 def _go2rtc_ensure_stream(gateway: str, stream_name: str, rtsp_url: str) -> None:
     """go2rtc da stream yo'q bo'lsa qo'shadi, bor bo'lsa yangilaydi."""
-    import requests as _req
     try:
-        _req.put(
+        requests.put(
             f"{gateway}/api/streams",
             params={"name": stream_name, "src": rtsp_url},
             timeout=3,
@@ -544,10 +546,76 @@ def _go2rtc_ensure_stream(gateway: str, stream_name: str, rtsp_url: str) -> None
         pass  # go2rtc ishlamayotgan bo'lsa video element o'zi xato ko'rsatadi
 
 
+def _relay_gateway_response(url: str) -> StreamingResponse:
+    try:
+        upstream = requests.get(url, stream=True, timeout=(5, 30))
+        upstream.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Media gateway javob bermadi: {exc}") from exc
+
+    headers = {}
+    content_type = upstream.headers.get("content-type")
+    content_length = upstream.headers.get("content-length")
+    if content_length:
+        headers["content-length"] = content_length
+    return StreamingResponse(
+        upstream.iter_content(chunk_size=64 * 1024),
+        status_code=upstream.status_code,
+        media_type=content_type,
+        headers=headers,
+    )
+
+
+def _proxy_stream_url(upstream_url: str, *, camera_id: str, token: str | None) -> str:
+    token_part = f"&token={quote(token, safe='')}" if token else ""
+    return f"/cameras/{camera_id}/stream-proxy?url={quote(upstream_url, safe='')}{token_part}"
+
+
+def _rewrite_hls_playlist(body: str, *, gateway: str, camera_id: str, token: str | None) -> str:
+    rewritten = []
+
+    def to_proxy_url(value: str) -> str:
+        upstream_url = value if value.startswith("http") else urljoin(f"{gateway}/", value.lstrip("/"))
+        return _proxy_stream_url(upstream_url, camera_id=camera_id, token=token)
+
+    def replace_uri(match: re.Match) -> str:
+        return f'URI="{to_proxy_url(match.group(1))}"'
+
+    for line in body.splitlines():
+        value = line.strip()
+        if not value:
+            rewritten.append(line)
+            continue
+        if value.startswith("#"):
+            rewritten.append(re.sub(r'URI="([^"]+)"', replace_uri, line))
+            continue
+        rewritten.append(to_proxy_url(value))
+    return "\n".join(rewritten) + "\n"
+
+
+def _relay_hls_playlist(url: str, *, gateway: str, camera_id: str, token: str | None) -> Response:
+    try:
+        upstream = requests.get(url, timeout=(5, 15))
+        upstream.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Media gateway playlist bermadi: {exc}") from exc
+    playlist = _rewrite_hls_playlist(
+        upstream.text,
+        gateway=gateway,
+        camera_id=camera_id,
+        token=token,
+    )
+    return Response(
+        content=playlist,
+        media_type=upstream.headers.get("content-type") or "application/vnd.apple.mpegurl",
+    )
+
+
 @router.get("/cameras/{camera_id}/stream", summary="Proxy camera realtime stream")
 def camera_stream(
     camera_id: str,
     profile: str = Query("main"),
+    format: str = Query("mp4", pattern="^(mp4|hls)$"),
     token: str | None = None,
     user=Depends(optional_verify_token),
 ):
@@ -589,7 +657,31 @@ def camera_stream(
     stream_name = f"cam-{camera_id}"
     _go2rtc_ensure_stream(gateway, stream_name, rtsp_with_creds)
 
-    return RedirectResponse(f"{gateway}/api/stream.m3u8?src={stream_name}")
+    if format == "mp4":
+        return _relay_gateway_response(f"{gateway}/api/stream.mp4?src={stream_name}")
+
+    return _relay_hls_playlist(
+        f"{gateway}/api/stream.m3u8?src={stream_name}",
+        gateway=gateway,
+        camera_id=camera_id,
+        token=token,
+    )
+
+
+@router.get("/cameras/{camera_id}/stream-proxy", summary="Relay camera stream segment through backend")
+def camera_stream_proxy(
+    camera_id: str,
+    url: str = Query(...),
+    token: str | None = None,
+    user=Depends(optional_verify_token),
+):
+    _authorize_media_request(token, user)
+    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
+    if not gateway:
+        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan")
+    if not url.startswith(f"{gateway}/"):
+        raise HTTPException(status_code=400, detail="Media gateway URL noto'g'ri")
+    return _relay_gateway_response(url)
 
 
 @router.get("/cameras/{camera_id}/audio", summary="Proxy camera audio stream")
@@ -608,7 +700,7 @@ def camera_audio(
     if not camera["has_audio"]:
         raise HTTPException(status_code=400, detail="Camera audio is not supported")
     stream_name = f"cam-{camera_id}"
-    return RedirectResponse(f"{gateway}/api/stream.mp4?src={stream_name}")
+    return _relay_gateway_response(f"{gateway}/api/stream.mp4?src={stream_name}")
 
 
 @router.put(
