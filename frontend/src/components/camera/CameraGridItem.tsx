@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Expand, Volume2, VolumeX, Camera as CameraIcon, UserX } from 'lucide-react';
+import { Expand, Volume2, VolumeX, Camera as CameraIcon, UserX, RefreshCw } from 'lucide-react';
 import { Tooltip } from 'antd';
 import { BACKEND_ORIGIN, type Camera, type CameraMini, type LiveUnknownDetection } from '@/services/api';
 import { CameraStatusBadge } from './CameraStatusBadge';
@@ -64,7 +64,18 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-slate-500">
             <CameraIcon size={28} />
-            <span className="text-xs">Stream yo'q</span>
+            <span className="text-xs text-center px-2">
+              {!streamSrc ? 'Stream URL yo\'q' : 'Gateway ulanmadi'}
+            </span>
+            {videoError && (
+              <button
+                className="mt-1 flex items-center gap-1 rounded bg-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-600"
+                onClick={() => setVideoError(false)}
+              >
+                <RefreshCw size={10} />
+                Qayta urinish
+              </button>
+            )}
           </div>
         )}
 

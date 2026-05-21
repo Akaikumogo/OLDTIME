@@ -531,6 +531,19 @@ def talk_camera(camera_id: str, data: CameraTalkRequest, user=Depends(require_ro
     }
 
 
+def _go2rtc_ensure_stream(gateway: str, stream_name: str, rtsp_url: str) -> None:
+    """go2rtc da stream yo'q bo'lsa qo'shadi, bor bo'lsa yangilaydi."""
+    import requests as _req
+    try:
+        _req.put(
+            f"{gateway}/api/streams",
+            params={"name": stream_name, "src": rtsp_url},
+            timeout=3,
+        )
+    except Exception:
+        pass  # go2rtc ishlamayotgan bo'lsa video element o'zi xato ko'rsatadi
+
+
 @router.get("/cameras/{camera_id}/stream", summary="Proxy camera realtime stream")
 def camera_stream(
     camera_id: str,
@@ -539,10 +552,44 @@ def camera_stream(
     user=Depends(optional_verify_token),
 ):
     _authorize_media_request(token, user)
+
+    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
+    if not gateway:
+        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan (.env ga qo'shing)")
+
+    secret = camera_credential_secret()
     with get_connection() as conn:
         with conn.cursor() as cur:
-            fetch_camera(cur, camera_id)
-    return RedirectResponse(media_gateway_url("stream", camera_id, profile=profile))
+            cur.execute(
+                """
+                SELECT
+                    rtsp_main_url,
+                    rtsp_sub_url,
+                    username,
+                    CASE
+                        WHEN password_encrypted IS NULL THEN NULL
+                        ELSE pgp_sym_decrypt(password_encrypted, %s)
+                    END
+                FROM cameras
+                WHERE id = %s
+                """,
+                (secret, camera_id),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    rtsp_main, rtsp_sub, username, password = row
+    rtsp_url = (rtsp_sub if profile == "sub" and rtsp_sub else rtsp_main) or ""
+    if not rtsp_url:
+        raise HTTPException(status_code=503, detail="Camera RTSP URL sozlanmagan")
+
+    rtsp_with_creds = inject_rtsp_credentials(rtsp_url, username or "", password)
+    stream_name = f"cam-{camera_id}"
+    _go2rtc_ensure_stream(gateway, stream_name, rtsp_with_creds)
+
+    return RedirectResponse(f"{gateway}/api/stream.m3u8?src={stream_name}")
 
 
 @router.get("/cameras/{camera_id}/audio", summary="Proxy camera audio stream")
@@ -552,12 +599,16 @@ def camera_audio(
     user=Depends(optional_verify_token),
 ):
     _authorize_media_request(token, user)
+    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
+    if not gateway:
+        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan")
     with get_connection() as conn:
         with conn.cursor() as cur:
             camera = fetch_camera(cur, camera_id)
     if not camera["has_audio"]:
         raise HTTPException(status_code=400, detail="Camera audio is not supported")
-    return RedirectResponse(media_gateway_url("audio", camera_id))
+    stream_name = f"cam-{camera_id}"
+    return RedirectResponse(f"{gateway}/api/stream.mp4?src={stream_name}")
 
 
 @router.put(
