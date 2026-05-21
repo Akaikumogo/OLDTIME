@@ -78,6 +78,11 @@ const navItems: {
     icon: Camera
   },
   {
+    path: '/camera-monitoring',
+    label: { uz: 'Camera Monitor', en: 'Camera Monitor', ru: 'Мониторинг' },
+    icon: LayoutDashboard
+  },
+  {
     path: '/zones',
     label: { uz: 'Zones', en: 'Zones', ru: 'Зоны' },
     icon: MapPin
@@ -280,6 +285,7 @@ const Layout = () => {
         '/doors',
         '/computers',
         '/cameras',
+        '/camera-monitoring',
         '/zones',
         '/rooms',
         '/realtime-monitoring',

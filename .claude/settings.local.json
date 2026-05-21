@@ -3,5 +3,11 @@
     "ANTHROPIC_BASE_URL": "http://0.0.0.0:4000",
     "ANTHROPIC_API_KEY": "AIzaSyBAVyQtSrBtMEHgKdbExdsPg20T03-LUKM"
   },
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(xargs grep -l \"unknown.*detection\\\\|stranger\\\\|unidentified\")"
+    ]
+  },
   "primaryModel": "gemini/gemini-1.5-flash-latest"
 }

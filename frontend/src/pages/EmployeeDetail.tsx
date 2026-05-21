@@ -183,12 +183,9 @@ const EmployeeDetail = () => {
       apiService.assignEmployeeRoom(employeeId || '', roomId),
     onSuccess: () => {
       message.success('Xodim xonaga biriktirildi');
-      void queryClient.invalidateQueries({
-        queryKey: ['employee-live-location', employeeId]
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ['employee-camera-views', employeeId]
-      });
+      void queryClient.invalidateQueries({ queryKey: ['employee-live-location', employeeId] });
+      void queryClient.invalidateQueries({ queryKey: ['employee-camera-views', employeeId] });
+      void queryClient.invalidateQueries({ queryKey: ['employee-camera-productivity', employeeId] });
     }
   });
 

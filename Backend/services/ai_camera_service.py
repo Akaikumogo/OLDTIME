@@ -407,7 +407,10 @@ def assignment_for_employee(cur, employee_id: str):
 
 
 def serialize_assignment(cur, row):
-    room = fetch_room(cur, str(row[2]))
+    try:
+        room = fetch_room(cur, str(row[2]))
+    except HTTPException:
+        room = None
     return {
         "id": str(row[0]),
         "employee_id": str(row[1]),
@@ -533,13 +536,25 @@ def build_live_location(cur, employee_id: str):
     assigned_cameras = []
     assignment = assignment_for_employee(cur, employee_id)
     if assignment:
-        assigned_room = fetch_room(cur, str(assignment[2]))
+        try:
+            assigned_room = fetch_room(cur, str(assignment[2]))
+        except HTTPException:
+            assigned_room = None
         assigned_camera_id = str(assignment[3]) if assignment[3] else primary_camera_for_room(cur, str(assignment[2]))
-        assigned_cameras = assigned_room["cameras"]
+        assigned_cameras = assigned_room["cameras"] if assigned_room else []
 
-    active_camera = fetch_camera(cur, str(state[1])) if state and state[1] else None
-    active_zone = fetch_zone(cur, str(state[2])) if state and state[2] else None
-    active_room = fetch_room(cur, str(state[3])) if state and state[3] else None
+    try:
+        active_camera = fetch_camera(cur, str(state[1])) if state and state[1] else None
+    except HTTPException:
+        active_camera = None
+    try:
+        active_zone = fetch_zone(cur, str(state[2])) if state and state[2] else None
+    except HTTPException:
+        active_zone = None
+    try:
+        active_room = fetch_room(cur, str(state[3])) if state and state[3] else None
+    except HTTPException:
+        active_room = None
 
     return {
         "employee_id": employee_id,
@@ -836,6 +851,111 @@ def productivity_for_employee(cur, employee_id: str, date_from: datetime, date_t
         "inferred_zone_seconds": inferred_zone_seconds,
         "productivity_score": round(float(score), 2),
     }
+
+
+def list_unknown_detections(
+    cur,
+    camera_id: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    active_only: bool = False,
+    page: int = 1,
+    limit: int = 50,
+):
+    conditions = ["cde.employee_id IS NULL"]
+    params: list = []
+
+    if camera_id:
+        conditions.append("cde.camera_id = %s")
+        params.append(camera_id)
+    if date_from:
+        conditions.append("cde.seen_at >= %s")
+        params.append(date_from)
+    if date_to:
+        conditions.append("cde.seen_at <= %s")
+        params.append(date_to)
+    if active_only:
+        conditions.append("cde.disappeared_at IS NULL")
+
+    where = " AND ".join(conditions)
+
+    cur.execute(
+        f"SELECT COUNT(*) FROM camera_detection_events cde WHERE {where}",
+        params,
+    )
+    total = cur.fetchone()[0]
+
+    offset = (page - 1) * limit
+    cur.execute(
+        f"""
+        SELECT
+            cde.id, cde.camera_id, c.name, c.ip,
+            z.id, z.name,
+            c.room_id, r.name,
+            cde.track_id, cde.detection_type, cde.confidence,
+            cde.seen_at, cde.disappeared_at, cde.duration_seconds,
+            cde.snapshot_path, cde.bbox
+        FROM camera_detection_events cde
+        JOIN cameras c ON c.id = cde.camera_id
+        JOIN zones z ON z.id = cde.zone_id
+        LEFT JOIN rooms r ON r.id = c.room_id
+        WHERE {where}
+        ORDER BY cde.seen_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        params + [limit, offset],
+    )
+    rows = cur.fetchall()
+    data = [
+        {
+            "id": str(row[0]),
+            "camera_id": str(row[1]),
+            "camera_name": row[2],
+            "camera_ip": row[3],
+            "zone_id": str(row[4]),
+            "zone_name": row[5],
+            "room_id": str(row[6]) if row[6] else None,
+            "room_name": row[7],
+            "track_id": row[8],
+            "detection_type": row[9],
+            "confidence": float(row[10]),
+            "seen_at": str(row[11]),
+            "disappeared_at": str(row[12]) if row[12] else None,
+            "duration_seconds": row[13],
+            "snapshot_path": row[14],
+            "bbox": row[15],
+        }
+        for row in rows
+    ]
+    return total, data
+
+
+def live_unknown_per_camera(cur):
+    """Latest active unknown detection per camera (seen in last 5 minutes)."""
+    cur.execute(
+        """
+        SELECT DISTINCT ON (cde.camera_id)
+            cde.id, cde.camera_id, cde.track_id, cde.detection_type,
+            cde.confidence, cde.seen_at, cde.snapshot_path
+        FROM camera_detection_events cde
+        WHERE cde.employee_id IS NULL
+          AND cde.disappeared_at IS NULL
+          AND cde.seen_at >= NOW() - INTERVAL '5 minutes'
+        ORDER BY cde.camera_id, cde.seen_at DESC
+        """
+    )
+    return [
+        {
+            "id": str(row[0]),
+            "camera_id": str(row[1]),
+            "track_id": row[2],
+            "detection_type": row[3],
+            "confidence": float(row[4]),
+            "seen_at": str(row[5]),
+            "snapshot_path": row[6],
+        }
+        for row in cur.fetchall()
+    ]
 
 
 def media_gateway_url(kind: str, camera_id: str, profile: str | None = None):

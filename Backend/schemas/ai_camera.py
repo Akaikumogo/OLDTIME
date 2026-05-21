@@ -304,3 +304,47 @@ class EmployeeLocationStateRow(EmployeeLiveLocationResponse):
 
 class EmployeeLocationStateListResponse(BaseModel):
     data: list[EmployeeLocationStateRow]
+
+
+class UnknownDetectionItem(BaseModel):
+    id: str
+    camera_id: str
+    camera_name: str
+    camera_ip: str
+    zone_id: str
+    zone_name: str
+    room_id: Optional[str]
+    room_name: Optional[str]
+    track_id: str
+    detection_type: DetectionType
+    confidence: float
+    seen_at: str
+    disappeared_at: Optional[str]
+    duration_seconds: Optional[int]
+    snapshot_path: Optional[str]
+    bbox: Optional[dict]
+
+
+class UnknownDetectionListMeta(BaseModel):
+    page: int
+    limit: int
+    total: int
+
+
+class UnknownDetectionListResponse(BaseModel):
+    meta: UnknownDetectionListMeta
+    data: list[UnknownDetectionItem]
+
+
+class LiveUnknownDetection(BaseModel):
+    id: str
+    camera_id: str
+    track_id: str
+    detection_type: DetectionType
+    confidence: float
+    seen_at: str
+    snapshot_path: Optional[str]
+
+
+class LiveUnknownDetectionsResponse(BaseModel):
+    data: list[LiveUnknownDetection]

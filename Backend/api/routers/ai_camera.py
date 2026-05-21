@@ -28,6 +28,8 @@ from schemas.ai_camera import (
     ZoneListResponse,
     ZoneUpdate,
     CameraDetectionCreate,
+    LiveUnknownDetectionsResponse,
+    UnknownDetectionListResponse,
 )
 from schemas.common import MessageResponse
 from services.ai_camera_service import (
@@ -40,6 +42,8 @@ from services.ai_camera_service import (
     fetch_room,
     inject_rtsp_credentials,
     list_room_cameras,
+    list_unknown_detections,
+    live_unknown_per_camera,
     location_event_payload,
     media_gateway_url,
     normalize_camera_values,
@@ -684,6 +688,51 @@ async def create_camera_detection(
     if live_location:
         await location_connections.broadcast(location_event_payload(live_location))
     return {"message": f"camera detection stored: {event_id}"}
+
+
+@router.get(
+    "/unknown-detections",
+    response_model=UnknownDetectionListResponse,
+    summary="List unknown person detections (employee_id IS NULL)",
+)
+def list_unknown_detections_endpoint(
+    camera_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    active_only: bool = Query(False, description="Only detections still on camera (disappeared_at IS NULL)"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    user=Depends(require_role(["admin", "hr"])),
+):
+    from services.device_service import parse_datetime_input
+
+    df = parse_datetime_input(date_from) if date_from else None
+    dto = parse_datetime_input(date_to) if date_to else None
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            total, data = list_unknown_detections(
+                cur,
+                camera_id=camera_id,
+                date_from=df,
+                date_to=dto,
+                active_only=active_only,
+                page=page,
+                limit=limit,
+            )
+    return {"meta": {"page": page, "limit": limit, "total": total}, "data": data}
+
+
+@router.get(
+    "/cameras/live-unknown-detections",
+    response_model=LiveUnknownDetectionsResponse,
+    summary="Latest active unknown detection per camera (last 5 min)",
+)
+def get_live_unknown_detections(user=Depends(require_role(["admin", "hr"]))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            data = live_unknown_per_camera(cur)
+    return {"data": data}
 
 
 @router.get(

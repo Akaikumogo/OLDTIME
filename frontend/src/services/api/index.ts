@@ -1418,6 +1418,28 @@ class ApiService {
     return data;
   }
 
+  async listUnknownDetections(params?: {
+    camera_id?: string;
+    date_from?: string;
+    date_to?: string;
+    active_only?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const { data } = await this.api.get<{
+      meta: { page: number; limit: number; total: number };
+      data: UnknownDetectionItem[];
+    }>('/unknown-detections', { params });
+    return data;
+  }
+
+  async getLiveUnknownDetections() {
+    const { data } = await this.api.get<{ data: LiveUnknownDetection[] }>(
+      '/cameras/live-unknown-detections'
+    );
+    return data.data;
+  }
+
   async getEmployeeLiveLocation(employeeId: string) {
     const { data } = await this.api.get<EmployeeLiveLocation>(
       `/employees/${employeeId}/live-location`
@@ -1828,6 +1850,35 @@ export type CameraProductivityBreakdown = {
   not_visible_seconds: number;
   inferred_zone_seconds: number;
   productivity_score: number;
+};
+
+export type UnknownDetectionItem = {
+  id: string;
+  camera_id: string;
+  camera_name: string;
+  camera_ip: string;
+  zone_id: string;
+  zone_name: string;
+  room_id?: string | null;
+  room_name?: string | null;
+  track_id: string;
+  detection_type: DetectionType;
+  confidence: number;
+  seen_at: string;
+  disappeared_at?: string | null;
+  duration_seconds?: number | null;
+  snapshot_path?: string | null;
+  bbox?: Record<string, unknown> | null;
+};
+
+export type LiveUnknownDetection = {
+  id: string;
+  camera_id: string;
+  track_id: string;
+  detection_type: DetectionType;
+  confidence: number;
+  seen_at: string;
+  snapshot_path?: string | null;
 };
 
 const apiService = new ApiService();

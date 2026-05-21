@@ -30,6 +30,7 @@ const Cameras = lazy(() => import('./pages/Cameras'));
 const Zones = lazy(() => import('./pages/Zones'));
 const Rooms = lazy(() => import('./pages/Rooms'));
 const RealtimeMonitoring = lazy(() => import('./pages/RealtimeMonitoring'));
+const CameraMonitoring = lazy(() => import('./pages/CameraMonitoring'));
 const Doors = lazy(() => import('./pages/Doors'));
 const Positions = lazy(() => import('./pages/Positions'));
 const Admins = lazy(() => import('./pages/Admins'));
@@ -114,6 +115,10 @@ export const routes: RouteObject[] = [
           {
             path: 'realtime-monitoring',
             element: withSuspense(RealtimeMonitoring)
+          },
+          {
+            path: 'camera-monitoring',
+            element: withSuspense(CameraMonitoring)
           },
           {
             path: 'doors',
