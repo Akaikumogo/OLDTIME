@@ -3,7 +3,8 @@
 
 $go2rtcDir = "$PSScriptRoot\go2rtc"
 $go2rtcExe = "$go2rtcDir\go2rtc.exe"
-$go2rtcUrl = "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_win64.exe"
+$go2rtcZip = "$go2rtcDir\go2rtc_win64.zip"
+$go2rtcUrl = "https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_win64.zip"
 
 if (-not (Test-Path $go2rtcDir)) {
     New-Item -ItemType Directory -Path $go2rtcDir | Out-Null
@@ -11,7 +12,23 @@ if (-not (Test-Path $go2rtcDir)) {
 
 if (-not (Test-Path $go2rtcExe)) {
     Write-Host "go2rtc yuklab olinmoqda..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $go2rtcUrl -OutFile $go2rtcExe
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $go2rtcUrl -OutFile $go2rtcZip -UseBasicParsing
+        Expand-Archive -LiteralPath $go2rtcZip -DestinationPath $go2rtcDir -Force
+    } catch {
+        if (Test-Path $go2rtcZip) {
+            Remove-Item -LiteralPath $go2rtcZip -Force
+        }
+        throw
+    } finally {
+        if (Test-Path $go2rtcZip) {
+            Remove-Item -LiteralPath $go2rtcZip -Force
+        }
+    }
+    if (-not (Test-Path $go2rtcExe)) {
+        throw "go2rtc.exe zip ichidan topilmadi"
+    }
     Write-Host "Yuklandi: $go2rtcExe" -ForegroundColor Green
 } else {
     Write-Host "go2rtc allaqachon mavjud: $go2rtcExe" -ForegroundColor Green

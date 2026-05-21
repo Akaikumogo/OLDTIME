@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Expand, Volume2, VolumeX, Camera as CameraIcon, UserX, RefreshCw } from 'lucide-react';
 import { Tooltip } from 'antd';
 import { BACKEND_ORIGIN, type Camera, type CameraMini, type LiveUnknownDetection } from '@/services/api';
@@ -33,7 +33,23 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
   const [videoError, setVideoError] = useState(false);
   const [listening, setListening] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [shouldStream, setShouldStream] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return undefined;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setShouldStream(entry.isIntersecting);
+      },
+      { rootMargin: '480px 0px', threshold: 0.01 }
+    );
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const streamSrc = useMemo(() => {
     if (!camera?.stream_url) return null;
@@ -55,7 +71,7 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
     >
       {/* Video */}
       <div className="relative aspect-video w-full bg-slate-950">
-        {streamSrc && !videoError ? (
+        {streamSrc && shouldStream && !videoError ? (
           <video
             key={`grid-${camera.id}-${streamSrc}`}
             src={streamSrc}
@@ -63,6 +79,7 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
             autoPlay
             playsInline
             muted={!listening}
+            preload="none"
             controls={false}
             onError={() => setVideoError(true)}
           />
@@ -70,7 +87,11 @@ export function CameraGridItem({ camera, unknownDetection }: Props) {
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-slate-500">
             <CameraIcon size={28} />
             <span className="text-xs text-center px-2">
-              {!streamSrc ? 'Stream URL yo\'q' : 'Gateway ulanmadi'}
+              {!streamSrc
+                ? 'Stream URL yo\'q'
+                : videoError
+                  ? 'Gateway ulanmadi'
+                  : 'Stream kutilyapti'}
             </span>
             {videoError && (
               <button

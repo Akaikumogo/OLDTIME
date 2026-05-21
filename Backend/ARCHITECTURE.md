@@ -27,6 +27,24 @@ flowchart LR
     Poller --> Images["face_captures / image storage"]
 ```
 
+## Camera Media Gateway
+
+Live camera video is served through a separate `go2rtc` media gateway. The backend should not start `go2rtc` itself in production, because the server OS and process manager may differ. Run `go2rtc` as a sidecar service and point the backend to it with:
+
+```env
+AI_CAMERA_MEDIA_GATEWAY_URL=http://127.0.0.1:1984
+```
+
+For Docker-capable servers, use the repository-level media compose file:
+
+```bash
+docker compose -f docker-compose.media.yml up -d
+```
+
+This keeps the runtime OS-neutral: Linux, Windows Server, and Docker hosts all expose the same gateway API to FastAPI. If the backend also runs inside Docker on the same compose network, set `AI_CAMERA_MEDIA_GATEWAY_URL=http://go2rtc:1984`. If the backend runs on the host, keep `AI_CAMERA_MEDIA_GATEWAY_URL=http://127.0.0.1:1984`.
+
+The browser never connects to `go2rtc` or a camera directly. It calls the backend stream endpoint, and the backend relays media from `go2rtc`.
+
 ## Backend Layerlar
 
 ```text

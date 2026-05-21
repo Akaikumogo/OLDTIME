@@ -1,0 +1,8 @@
+﻿api:
+  listen: ":1984"
+
+# Kameralar backend orqali dinamik ro'yxatdan o'tkaziladi.
+# Qo'lda qo'shish uchun:
+# streams:
+#   cam-UUID:
+#     - rtsp://admin:password@IP:554/Streaming/Channels/101

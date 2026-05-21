@@ -1,0 +1,13 @@
+services:
+  go2rtc:
+    image: ghcr.io/alexxit/go2rtc:latest
+    container_name: workplus-go2rtc
+    restart: unless-stopped
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    volumes:
+      - ./go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+    command: ["-config", "/config/go2rtc.yaml"]

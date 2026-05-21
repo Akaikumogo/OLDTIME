@@ -611,6 +611,31 @@ def _relay_hls_playlist(url: str, *, gateway: str, camera_id: str, token: str | 
     )
 
 
+@router.get("/cameras/media-gateway/status", summary="Check camera media gateway")
+def camera_media_gateway_status(user=Depends(require_role(["admin", "hr"]))):
+    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
+    if not gateway:
+        return {
+            "status": "not_configured",
+            "gateway_url": None,
+            "message": "AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan",
+        }
+    try:
+        response = requests.get(f"{gateway}/api/streams", timeout=3)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {
+            "status": "offline",
+            "gateway_url": gateway,
+            "message": str(exc),
+        }
+    return {
+        "status": "online",
+        "gateway_url": gateway,
+        "streams": response.json(),
+    }
+
+
 @router.get("/cameras/{camera_id}/stream", summary="Proxy camera realtime stream")
 def camera_stream(
     camera_id: str,
