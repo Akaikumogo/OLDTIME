@@ -7,7 +7,15 @@
     "allow": [
       "Bash(npx tsc *)",
       "Bash(xargs grep -l \"unknown.*detection\\\\|stranger\\\\|unidentified\")",
-      "Bash(python -m py_compile api/routers/ai_camera.py)"
+      "Bash(python -m py_compile api/routers/ai_camera.py)",
+      "Bash(tasklist)",
+      "Bash(findstr -i \"python\")",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":8000\")",
+      "Bash(findstr \"LOCAL\")",
+      "Bash(findstr \"8000\")",
+      "Bash(python -m py_compile api/routers/ai_camera.py services/isapi_talkback.py)",
+      "Bash(python -m py_compile services/isapi_talkback.py api/routers/ai_camera.py)"
     ]
   },
   "primaryModel": "gemini/gemini-1.5-flash-latest"

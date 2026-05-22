@@ -3,6 +3,7 @@ import { Expand, Volume2, VolumeX, Camera as CameraIcon, UserX, RefreshCw } from
 import { Tooltip } from 'antd';
 import { BACKEND_ORIGIN, type Camera, type CameraMini, type LiveUnknownDetection } from '@/services/api';
 import { CameraStatusBadge } from './CameraStatusBadge';
+import { TalkbackWidget } from './TalkbackWidget';
 import { formatDateTime } from '@/utils/date';
 
 type CameraLike = Camera | CameraMini;
@@ -158,6 +159,11 @@ export function CameraGridItem({ camera, unknownDetection, profile = 'main' }: P
             </button>
           </Tooltip>
         </div>
+      </div>
+
+      {/* Talkback widget */}
+      <div className="p-2 border-t border-slate-700 bg-slate-900">
+        <TalkbackWidget cameraId={camera.id} />
       </div>
     </div>
   );
