@@ -163,6 +163,35 @@ def test_breakdown_zero_duration_skipped():
     assert bd.total_seconds == 60
 
 
+def test_breakdown_idle_excluded_from_score_denominator():
+    app_rules = [app_rule("vscode", "productive")]
+    bd = calculate_breakdown(
+        [
+            seg(3600, app="VSCode"),
+            seg(3600, app="__idle__"),
+        ],
+        app_rules,
+        [],
+    )
+    assert bd.total_seconds == 7200
+    assert bd.idle_seconds == 3600
+    assert bd.active_seconds == 3600
+    assert bd.productivity_score == 100.0
+
+
+def test_breakdown_uses_segment_department_rule():
+    rules = [
+        app_rule("telegram", "neutral", priority=50),
+        app_rule("telegram", "productive", priority=10, dept="dept-1"),
+    ]
+    bd = calculate_breakdown(
+        [ActivitySegment(duration_seconds=60, app_name="Telegram", url=None, department_id="dept-1")],
+        rules,
+        [],
+    )
+    assert bd.productive_seconds == 60
+
+
 def test_breakdown_aggregates_by_app_and_site_and_label():
     app_rules = [app_rule("vscode", "productive", "IDE")]
     site_rules = [site_rule("github.com", "productive", "Code")]

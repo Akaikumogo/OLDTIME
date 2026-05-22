@@ -1,0 +1,8 @@
+opencv-python-headless>=4.9
+requests>=2.31
+numpy>=1.26
+python-dotenv>=1.0
+ultralytics>=8.2
+torch>=2.2
+torchvision>=0.17
+git+https://github.com/KaiyangZhou/deep-person-reid.git

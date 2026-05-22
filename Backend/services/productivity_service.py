@@ -112,6 +112,7 @@ class ActivitySegment:
     duration_seconds: int
     app_name: Optional[str]
     url: Optional[str]
+    department_id: Optional[str] = None
 
 
 @dataclass
@@ -119,6 +120,7 @@ class ProductivityBreakdown:
     productive_seconds: int = 0
     unproductive_seconds: int = 0
     neutral_seconds: int = 0
+    idle_seconds: int = 0
     total_seconds: int = 0
     by_app: dict[str, int] = None  # type: ignore
     by_site: dict[str, int] = None  # type: ignore
@@ -133,9 +135,14 @@ class ProductivityBreakdown:
             self.by_label = {}
 
     @property
+    def active_seconds(self) -> int:
+        return max(0, self.total_seconds - self.idle_seconds)
+
+    @property
     def productivity_score(self) -> float:
-        # 0.0 - 100.0 oraliqda. Neutral o'rtasiga sanaladi (0.5 koeffitsient).
-        denom = self.total_seconds
+        # 0.0 - 100.0 oraliqda. Idle vaqt score denominatoriga kirmaydi.
+        # Neutral o'rtasiga sanaladi (0.5 koeffitsient).
+        denom = self.active_seconds
         if denom == 0:
             return 0.0
         score = (self.productive_seconds + self.neutral_seconds * 0.5) / denom
@@ -160,12 +167,18 @@ def calculate_breakdown(
         seconds = max(int(seg.duration_seconds or 0), 0)
         if seconds == 0:
             continue
+        if normalize_text(seg.app_name) in {"__idle__", "idle"}:
+            breakdown.idle_seconds += seconds
+            breakdown.total_seconds += seconds
+            by_app["Idle"] += seconds
+            by_label["Idle"] += seconds
+            continue
         category, label = classify(
             seg.app_name,
             seg.url,
             rules_app_list,
             rules_site_list,
-            department_id=department_id,
+            department_id=seg.department_id or department_id,
             default_category=default_category,
         )
         breakdown.total_seconds += seconds

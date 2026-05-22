@@ -34,7 +34,8 @@ EMPLOYEE_ID = os.getenv("WORKPLUS_EMPLOYEE_ID") or None
 POLL_SECONDS = int(os.getenv("WORKPLUS_POLL_SECONDS", "5"))
 FLUSH_SECONDS = int(os.getenv("WORKPLUS_FLUSH_SECONDS", "30"))
 HEARTBEAT_SECONDS = int(os.getenv("WORKPLUS_HEARTBEAT_SECONDS", "60"))
-COLLECT_URLS = os.getenv("WORKPLUS_COLLECT_URLS", "false").lower() == "true"
+COLLECT_URLS = os.getenv("WORKPLUS_COLLECT_URLS", "true").lower() == "true"
+IDLE_THRESHOLD_SECONDS = int(os.getenv("WORKPLUS_IDLE_THRESHOLD_SECONDS", "300"))
 MAX_QUEUE_EVENTS = int(os.getenv("WORKPLUS_MAX_QUEUE_EVENTS", "5000"))
 APP_DIR_ENV = os.getenv("WORKPLUS_APP_DIR")
 QUEUE_FILE_ENV = os.getenv("WORKPLUS_QUEUE_FILE")
@@ -209,6 +210,58 @@ def active_window_windows() -> tuple[str, str]:
     return app_name, title
 
 
+def idle_seconds_windows() -> int:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+        last_input = LASTINPUTINFO()
+        last_input.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input)):
+            return 0
+        tick_count = ctypes.windll.kernel32.GetTickCount()
+        return max(0, int((tick_count - last_input.dwTime) / 1000))
+    except Exception:
+        return 0
+
+
+def browser_url_windows(hwnd: int, app_name: str) -> Optional[str]:
+    if not COLLECT_URLS:
+        return None
+    lowered = app_name.lower()
+    if not any(token in lowered for token in ("chrome", "msedge", "firefox", "browser")):
+        return None
+    try:
+        from pywinauto import Desktop  # type: ignore
+    except Exception:
+        return None
+
+    try:
+        window = Desktop(backend="uia").window(handle=hwnd)
+        edits = window.descendants(control_type="Edit")
+    except Exception:
+        return None
+
+    candidates = []
+    for edit in edits[:12]:
+        try:
+            value = edit.get_value()
+        except Exception:
+            value = ""
+        try:
+            name = edit.window_text()
+        except Exception:
+            name = ""
+        text = value or name
+        url = sanitize_url(text)
+        if url:
+            candidates.append(url)
+    return candidates[0] if candidates else None
+
+
 def active_window_linux() -> tuple[str, str]:
     title = run_command(["xdotool", "getactivewindow", "getwindowname"])
     return "Unknown", title
@@ -220,8 +273,16 @@ def get_active_context() -> tuple[str, str, Optional[str]]:
         app, title = active_window_macos()
         return app, title, browser_url_macos(app)
     if system == "Windows":
+        if idle_seconds_windows() >= IDLE_THRESHOLD_SECONDS:
+            return "__idle__", "User idle", None
         app, title = active_window_windows()
-        return app, title, None
+        try:
+            import win32gui  # type: ignore
+
+            hwnd = win32gui.GetForegroundWindow()
+        except Exception:
+            hwnd = 0
+        return app, title, browser_url_windows(hwnd, app)
     return (*active_window_linux(), None)
 
 

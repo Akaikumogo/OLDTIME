@@ -59,6 +59,8 @@ class ProductivityBreakdownResponse(BaseModel):
     productive_seconds: int
     unproductive_seconds: int
     neutral_seconds: int
+    idle_seconds: int = 0
+    active_seconds: int = 0
     total_seconds: int
     productivity_score: float
     by_app: list[ProductivityBucket]
@@ -71,6 +73,8 @@ class EmployeeProductivityRow(BaseModel):
     productive_seconds: int
     unproductive_seconds: int
     neutral_seconds: int
+    idle_seconds: int = 0
+    active_seconds: int = 0
     total_seconds: int
     productivity_score: float
 
@@ -87,6 +91,8 @@ class DepartmentProductivityRow(BaseModel):
     productive_seconds: int
     unproductive_seconds: int
     neutral_seconds: int
+    idle_seconds: int = 0
+    active_seconds: int = 0
     total_seconds: int
     productivity_score: float
 

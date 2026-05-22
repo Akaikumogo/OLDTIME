@@ -1522,6 +1522,8 @@ export type ProductivityBreakdown = {
   productive_seconds: number;
   unproductive_seconds: number;
   neutral_seconds: number;
+  idle_seconds: number;
+  active_seconds: number;
   total_seconds: number;
   productivity_score: number;
   by_app: ProductivityBucket[];
@@ -1538,6 +1540,8 @@ export type EmployeeProductivityRow = {
   productive_seconds: number;
   unproductive_seconds: number;
   neutral_seconds: number;
+  idle_seconds: number;
+  active_seconds: number;
   total_seconds: number;
   productivity_score: number;
 };
@@ -1554,6 +1558,8 @@ export type DepartmentProductivityRow = {
   productive_seconds: number;
   unproductive_seconds: number;
   neutral_seconds: number;
+  idle_seconds: number;
+  active_seconds: number;
   total_seconds: number;
   productivity_score: number;
 };

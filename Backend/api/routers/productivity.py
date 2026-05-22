@@ -232,8 +232,8 @@ def _fetch_segments(
     employee_id: Optional[str] = None,
     department_id: Optional[str] = None,
 ):
-    filters = ["cae.started_at >= %s", "cae.started_at <= %s"]
-    params: list = [start_dt, end_dt]
+    filters = ["cae.started_at <= %s", "cae.ended_at >= %s"]
+    params: list = [end_dt, start_dt]
     if employee_id:
         filters.append("cae.employee_id = %s")
         params.append(employee_id)
@@ -246,14 +246,18 @@ def _fetch_segments(
     cur.execute(
         f"""
         SELECT cae.app_name, cae.url, cae.duration_seconds,
-               cae.employee_id, e.full_name, e.department_id, d.name
+               cae.employee_id, e.full_name, e.department_id, d.name,
+               GREATEST(
+                   0,
+                   EXTRACT(EPOCH FROM (LEAST(cae.ended_at, %s) - GREATEST(cae.started_at, %s)))::int
+               ) AS clipped_duration_seconds
         FROM computer_activity_events cae
         LEFT JOIN employees e ON e.id = cae.employee_id
         LEFT JOIN departments d ON d.id = e.department_id
         WHERE {where}
         ORDER BY cae.started_at ASC
         """,
-        params,
+        [end_dt, start_dt] + params,
     )
     return cur.fetchall()
 
@@ -286,9 +290,10 @@ def productivity_overview(
 
     segments = [
         ActivitySegment(
-            duration_seconds=int(row[2] or 0),
+            duration_seconds=int(row[7] or row[2] or 0),
             app_name=row[0],
             url=row[1],
+            department_id=str(row[5]) if row[5] else None,
         )
         for row in rows
     ]
@@ -303,6 +308,8 @@ def productivity_overview(
         productive_seconds=breakdown.productive_seconds,
         unproductive_seconds=breakdown.unproductive_seconds,
         neutral_seconds=breakdown.neutral_seconds,
+        idle_seconds=breakdown.idle_seconds,
+        active_seconds=breakdown.active_seconds,
         total_seconds=breakdown.total_seconds,
         productivity_score=breakdown.productivity_score,
         by_app=_make_buckets(breakdown.by_app, breakdown.total_seconds),
@@ -351,9 +358,10 @@ def productivity_by_employee(
         )
         info["segments"].append(
             ActivitySegment(
-                duration_seconds=int(row[2] or 0),
+                duration_seconds=int(row[7] or row[2] or 0),
                 app_name=row[0],
                 url=row[1],
+                department_id=str(row[5]) if row[5] else None,
             )
         )
 
@@ -372,6 +380,8 @@ def productivity_by_employee(
                 "productive_seconds": breakdown.productive_seconds,
                 "unproductive_seconds": breakdown.unproductive_seconds,
                 "neutral_seconds": breakdown.neutral_seconds,
+                "idle_seconds": breakdown.idle_seconds,
+                "active_seconds": breakdown.active_seconds,
                 "total_seconds": breakdown.total_seconds,
                 "productivity_score": breakdown.productivity_score,
             }
@@ -422,9 +432,10 @@ def productivity_by_department(
             info["employee_ids"].add(str(row[3]))
         info["segments"].append(
             ActivitySegment(
-                duration_seconds=int(row[2] or 0),
+                duration_seconds=int(row[7] or row[2] or 0),
                 app_name=row[0],
                 url=row[1],
+                department_id=str(row[5]) if row[5] else None,
             )
         )
 
@@ -444,6 +455,8 @@ def productivity_by_department(
                 "productive_seconds": breakdown.productive_seconds,
                 "unproductive_seconds": breakdown.unproductive_seconds,
                 "neutral_seconds": breakdown.neutral_seconds,
+                "idle_seconds": breakdown.idle_seconds,
+                "active_seconds": breakdown.active_seconds,
                 "total_seconds": breakdown.total_seconds,
                 "productivity_score": breakdown.productivity_score,
             }
