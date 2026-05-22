@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Button, Empty, Select, Spin } from 'antd';
-import { LayoutGrid, RefreshCw } from 'lucide-react';
+import { Badge, Button, Empty, Select, Spin, Tooltip } from 'antd';
+import { Activity, LayoutGrid, RefreshCw, Server } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import apiService, { type Camera, type Zone } from '@/services/api';
 import { CameraGridItem } from '@/components/camera/CameraGridItem';
@@ -46,6 +46,12 @@ export default function CameraMonitoring() {
     refetchInterval: 5_000,
   });
 
+  const mediaGatewayQuery = useQuery({
+    queryKey: ['camera-media-gateway-status'],
+    queryFn: () => apiService.getCameraMediaGatewayStatus(),
+    refetchInterval: 15_000,
+  });
+
   const unknownByCamera = useMemo(() => {
     const map = new Map<string, NonNullable<typeof liveUnknownQuery.data>[number]>();
     for (const item of liveUnknownQuery.data ?? []) {
@@ -65,15 +71,46 @@ export default function CameraMonitoring() {
   });
 
   const cameras: Camera[] = camerasQuery.data?.data ?? [];
+  const cameraStats = useMemo(() => {
+    return cameras.reduce(
+      (acc, camera) => {
+        acc.total += 1;
+        if (camera.status === 'online') acc.online += 1;
+        if (camera.status === 'offline' || camera.status === 'error') acc.offline += 1;
+        if (camera.has_audio) acc.audio += 1;
+        return acc;
+      },
+      { total: 0, online: 0, offline: 0, audio: 0 }
+    );
+  }, [cameras]);
+  const gatewayStatus = mediaGatewayQuery.data?.status ?? 'offline';
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3 dark:border-slate-800 dark:bg-slate-950">
-        <LayoutGrid size={18} className="text-blue-600" />
-        <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-          Kamera monitoringi
-        </span>
+        <div className="flex min-w-[220px] items-center gap-3">
+          <LayoutGrid size={18} className="text-blue-600" />
+          <div>
+            <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              Kamera monitoringi
+            </span>
+            <div className="mt-0.5 flex items-center gap-3 text-[11px] text-slate-500">
+              <span>{cameraStats.total} kamera</span>
+              <span>{cameraStats.online} online</span>
+              <span>{cameraStats.audio} audio</span>
+            </div>
+          </div>
+        </div>
+        <Tooltip title={mediaGatewayQuery.data?.gateway_url || mediaGatewayQuery.data?.message || 'Media gateway'}>
+          <div className="flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
+            <Server size={14} />
+            <Badge
+              status={gatewayStatus === 'online' ? 'success' : 'error'}
+              text={gatewayStatus === 'online' ? 'Gateway online' : 'Gateway offline'}
+            />
+          </div>
+        </Tooltip>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Select
             placeholder="Zona"
@@ -111,6 +148,12 @@ export default function CameraMonitoring() {
             onChange={setStreamProfile}
             options={STREAM_PROFILE_OPTIONS}
           />
+          <Tooltip title="Live polling">
+            <div className="flex h-9 items-center gap-1 rounded-md border border-slate-200 px-2 text-xs text-slate-500 dark:border-slate-800">
+              <Activity size={14} />
+              {liveUnknownQuery.isFetching ? 'Sync' : 'Ready'}
+            </div>
+          </Tooltip>
           <Button
             icon={<RefreshCw size={15} />}
             loading={camerasQuery.isFetching}
@@ -133,7 +176,7 @@ export default function CameraMonitoring() {
         ) : (
           <>
             <p className="mb-3 text-xs text-slate-400">
-              {cameras.length} ta kamera
+              {cameras.length} ta kamera · {streamProfile === 'main' ? 'sifatli oqim' : 'tezkor oqim'}
             </p>
             <div className={`grid gap-3 ${GRID_CLASS[cols] ?? GRID_CLASS[3]}`}>
               {cameras.map((camera) => (

@@ -1440,6 +1440,13 @@ class ApiService {
     return data.data;
   }
 
+  async getCameraMediaGatewayStatus() {
+    const { data } = await this.api.get<CameraMediaGatewayStatus>(
+      '/cameras/media-gateway/status'
+    );
+    return data;
+  }
+
   async getEmployeeLiveLocation(employeeId: string) {
     const { data } = await this.api.get<EmployeeLiveLocation>(
       `/employees/${employeeId}/live-location`
@@ -1695,6 +1702,7 @@ export type CameraMini = {
   is_primary: boolean;
   view_position?: string | null;
   stream_url: string;
+  audio_url: string;
 };
 
 export type RoomCameraInput = {
@@ -1745,6 +1753,13 @@ export type Camera = {
   updated_at: string;
   stream_url: string;
   audio_url: string;
+};
+
+export type CameraMediaGatewayStatus = {
+  status: 'online' | 'offline' | 'not_configured';
+  gateway_url: string | null;
+  message?: string;
+  streams?: Record<string, unknown>;
 };
 
 export type CameraInput = {

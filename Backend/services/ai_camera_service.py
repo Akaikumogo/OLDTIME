@@ -190,6 +190,7 @@ def serialize_camera_mini(row):
         "is_primary": bool(row[8]),
         "view_position": row[9],
         "stream_url": stream_url(camera_id),
+        "audio_url": audio_url(camera_id),
     }
 
 

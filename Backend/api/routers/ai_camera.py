@@ -752,60 +752,39 @@ def camera_audio(
 ):
     _authorize_media_request(token, user)
     gateway = _get_gateway_url(request)
+
+    secret = camera_credential_secret()
     with get_connection() as conn:
         with conn.cursor() as cur:
-            camera = fetch_camera(cur, camera_id)
-    if not camera["has_audio"]:
+            cur.execute(
+                """
+                SELECT
+                    rtsp_main_url,
+                    username,
+                    CASE
+                        WHEN password_encrypted IS NULL THEN NULL
+                        ELSE pgp_sym_decrypt(password_encrypted, %s)
+                    END,
+                    has_audio
+                FROM cameras
+                WHERE id = %s
+                """,
+                (secret, camera_id),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    rtsp_main, username, password, has_audio = row
+    if not has_audio:
         raise HTTPException(status_code=400, detail="Camera audio is not supported")
+    if not rtsp_main:
+        raise HTTPException(status_code=503, detail="Camera RTSP URL sozlanmagan")
+
     stream_name = f"cam-{camera_id}"
+    rtsp_with_creds = inject_rtsp_credentials(rtsp_main, username or "", password)
+    _go2rtc_ensure_stream(gateway, stream_name, rtsp_with_creds)
     return _relay_gateway_response(f"{gateway}/api/stream.mp4?src={stream_name}")
-
-
-@router.get("/cameras/{camera_id}/talkback/channels", summary="Get two-way audio channels")
-def get_talkback_channels(
-    camera_id: str,
-    token: str | None = None,
-    user=Depends(optional_verify_token),
-):
-    _authorize_media_request(token, user)
-    from services.isapi_talkback import get_twoway_audio_channels
-    try:
-        channels = get_twoway_audio_channels(camera_id)
-        return {"data": channels}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/cameras/{camera_id}/talkback/open", summary="Open two-way audio channel")
-def open_talkback(
-    camera_id: str,
-    channel_id: str = Query("1"),
-    token: str | None = None,
-    user=Depends(optional_verify_token),
-):
-    _authorize_media_request(token, user)
-    from services.isapi_talkback import open_twoway_audio
-    try:
-        open_twoway_audio(camera_id, channel_id)
-        return {"message": "Two-way audio opened", "camera_id": camera_id, "channel_id": channel_id}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/cameras/{camera_id}/talkback/close", summary="Close two-way audio channel")
-def close_talkback(
-    camera_id: str,
-    channel_id: str = Query("1"),
-    token: str | None = None,
-    user=Depends(optional_verify_token),
-):
-    _authorize_media_request(token, user)
-    from services.isapi_talkback import close_twoway_audio
-    try:
-        close_twoway_audio(camera_id, channel_id)
-        return {"message": "Two-way audio closed", "camera_id": camera_id, "channel_id": channel_id}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/cameras/{camera_id}/talkback/send-audio", summary="Send audio to camera speaker")
@@ -817,34 +796,13 @@ async def send_audio_to_camera(
     user=Depends(optional_verify_token),
 ):
     _authorize_media_request(token, user)
-    from services.isapi_talkback import send_audio_data
     try:
-        # Get audio data from request body
+        from services.isapi_talkback import send_audio_data
         body = await request.body()
         if not body:
             raise HTTPException(status_code=400, detail="No audio data provided")
-
         send_audio_data(camera_id, body, channel_id)
         return {"message": "Audio sent", "bytes": len(body)}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.get("/cameras/{camera_id}/talkback/receive-audio", summary="Receive audio stream from camera")
-def receive_audio_from_camera(
-    camera_id: str,
-    channel_id: str = Query("1"),
-    token: str | None = None,
-    user=Depends(optional_verify_token),
-):
-    _authorize_media_request(token, user)
-    from services.isapi_talkback import receive_audio_stream
-    try:
-        response = receive_audio_stream(camera_id, channel_id)
-        return StreamingResponse(
-            response.iter_content(chunk_size=8192),
-            media_type="audio/pcm",
-        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

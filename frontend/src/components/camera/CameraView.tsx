@@ -38,6 +38,18 @@ function tokenizedUrl(path: string) {
   return url.toString();
 }
 
+function tokenizedMediaUrl(path?: string | null) {
+  if (!path) return null;
+  const token =
+    localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
+  const base = path.startsWith('http') ? path : `${BACKEND_ORIGIN}${path}`;
+  const url = new URL(base);
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+  return url.toString();
+}
+
 function getRoomName(camera: CameraLike) {
   return 'room_name' in camera ? camera.room_name : null;
 }
@@ -54,6 +66,11 @@ export function CameraView({ camera, title, location }: CameraViewProps) {
     if (!camera?.stream_url) return null;
     return tokenizedUrl(camera.stream_url);
   }, [camera?.stream_url]);
+
+  const audioSrc = useMemo(() => {
+    if (!camera || !('audio_url' in camera)) return null;
+    return tokenizedMediaUrl(camera.audio_url);
+  }, [camera]);
 
   const detectionLabel = location
     ? location.inferred
@@ -146,7 +163,7 @@ export function CameraView({ camera, title, location }: CameraViewProps) {
             className="h-full w-full object-cover"
             autoPlay
             playsInline
-            muted={!listening}
+            muted
             controls={false}
             onError={() => setVideoError(true)}
           />
@@ -156,6 +173,14 @@ export function CameraView({ camera, title, location }: CameraViewProps) {
             <span className="text-sm">Media gateway ulanmagan</span>
           </div>
         )}
+        {listening && audioSrc ? (
+          <audio
+            key={`audio-${camera.id}-${audioSrc}`}
+            src={audioSrc}
+            autoPlay
+            onError={() => setListening(false)}
+          />
+        ) : null}
       </div>
 
       <div className="grid grid-cols-2 gap-3 p-3 text-xs text-slate-600 dark:text-slate-300 md:grid-cols-4">

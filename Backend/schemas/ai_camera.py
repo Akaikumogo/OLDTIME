@@ -95,6 +95,7 @@ class CameraMini(BaseModel):
     is_primary: bool = False
     view_position: Optional[str] = None
     stream_url: str
+    audio_url: str
 
 
 class RoomResponse(BaseModel):

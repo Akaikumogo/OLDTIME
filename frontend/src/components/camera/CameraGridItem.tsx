@@ -22,6 +22,18 @@ function tokenizedUrl(path: string, profile: StreamProfile) {
   return url.toString();
 }
 
+function tokenizedMediaUrl(path?: string | null) {
+  if (!path) return null;
+  const token =
+    localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
+  const base = path.startsWith('http') ? path : `${BACKEND_ORIGIN}${path}`;
+  const url = new URL(base);
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+  return url.toString();
+}
+
 function getRoomName(camera: CameraLike) {
   return 'room_name' in camera ? camera.room_name : null;
 }
@@ -59,6 +71,11 @@ export function CameraGridItem({ camera, unknownDetection, profile = 'main' }: P
     return tokenizedUrl(camera.stream_url, profile);
   }, [camera.stream_url, profile]);
 
+  const audioSrc = useMemo(() => {
+    if (!('audio_url' in camera)) return null;
+    return tokenizedMediaUrl(camera.audio_url);
+  }, [camera]);
+
   const handleFullscreen = async () => {
     await containerRef.current?.requestFullscreen?.();
   };
@@ -81,7 +98,7 @@ export function CameraGridItem({ camera, unknownDetection, profile = 'main' }: P
             className="h-full w-full object-cover"
             autoPlay
             playsInline
-            muted={!listening}
+            muted
             preload="none"
             controls={false}
             onError={() => setVideoError(true)}
@@ -107,6 +124,14 @@ export function CameraGridItem({ camera, unknownDetection, profile = 'main' }: P
             )}
           </div>
         )}
+        {listening && audioSrc ? (
+          <audio
+            key={`audio-${camera.id}-${audioSrc}`}
+            src={audioSrc}
+            autoPlay
+            onError={() => setListening(false)}
+          />
+        ) : null}
 
         {/* Top overlay: name + status */}
         <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-black/60 to-transparent p-2">
