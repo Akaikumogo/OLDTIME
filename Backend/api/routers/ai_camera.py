@@ -3,7 +3,7 @@ import re
 from urllib.parse import quote, urljoin
 
 import requests
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import Response, StreamingResponse
 
 from db import get_connection
@@ -534,6 +534,30 @@ def talk_camera(camera_id: str, data: CameraTalkRequest, user=Depends(require_ro
     }
 
 
+def _get_gateway_url(request: Request) -> str:
+    """
+    Get the media gateway URL based on the incoming request's Host header.
+    This allows video streaming to work from any network machine, not just localhost.
+
+    Example: If client accesses from 192.168.0.165:8000, returns http://192.168.0.165:1984
+    """
+    gateway_config = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
+    if not gateway_config:
+        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan (.env ga qo'shing)")
+
+    # Extract the port from configured gateway URL
+    gateway_port = "1984"  # default port
+    if "://" in gateway_config:
+        host_part = gateway_config.split("://", 1)[1]  # Get everything after http://
+        if ":" in host_part:
+            gateway_port = host_part.split(":", 1)[1]  # Get the port part
+
+    # Get the client's host (without port) from the request
+    client_host = request.headers.get("host", "localhost").split(":")[0]
+
+    return f"http://{client_host}:{gateway_port}"
+
+
 def _go2rtc_ensure_stream(gateway: str, stream_name: str, rtsp_url: str) -> None:
     """go2rtc da stream yo'q bo'lsa qo'shadi, bor bo'lsa yangilaydi."""
     try:
@@ -643,12 +667,11 @@ def camera_stream(
     format: str = Query("mp4", pattern="^(mp4|hls)$"),
     token: str | None = None,
     user=Depends(optional_verify_token),
+    request: Request = None,
 ):
     _authorize_media_request(token, user)
 
-    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
-    if not gateway:
-        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan (.env ga qo'shing)")
+    gateway = _get_gateway_url(request)
 
     secret = camera_credential_secret()
     with get_connection() as conn:
@@ -699,11 +722,10 @@ def camera_stream_proxy(
     url: str = Query(...),
     token: str | None = None,
     user=Depends(optional_verify_token),
+    request: Request = None,
 ):
     _authorize_media_request(token, user)
-    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
-    if not gateway:
-        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan")
+    gateway = _get_gateway_url(request)
     if not url.startswith(f"{gateway}/"):
         raise HTTPException(status_code=400, detail="Media gateway URL noto'g'ri")
     return _relay_gateway_response(url)
@@ -714,11 +736,10 @@ def camera_audio(
     camera_id: str,
     token: str | None = None,
     user=Depends(optional_verify_token),
+    request: Request = None,
 ):
     _authorize_media_request(token, user)
-    gateway = os.getenv("AI_CAMERA_MEDIA_GATEWAY_URL", "").strip().rstrip("/")
-    if not gateway:
-        raise HTTPException(status_code=503, detail="AI_CAMERA_MEDIA_GATEWAY_URL sozlanmagan")
+    gateway = _get_gateway_url(request)
     with get_connection() as conn:
         with conn.cursor() as cur:
             camera = fetch_camera(cur, camera_id)

@@ -6,7 +6,8 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(xargs grep -l \"unknown.*detection\\\\|stranger\\\\|unidentified\")"
+      "Bash(xargs grep -l \"unknown.*detection\\\\|stranger\\\\|unidentified\")",
+      "Bash(python -m py_compile api/routers/ai_camera.py)"
     ]
   },
   "primaryModel": "gemini/gemini-1.5-flash-latest"
