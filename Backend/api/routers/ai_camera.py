@@ -781,10 +781,11 @@ def camera_audio(
     if not rtsp_main:
         raise HTTPException(status_code=503, detail="Camera RTSP URL sozlanmagan")
 
-    stream_name = f"cam-{camera_id}"
+    stream_name = f"cam-{camera_id}-audio-aac"
     rtsp_with_creds = inject_rtsp_credentials(rtsp_main, username or "", password)
-    _go2rtc_ensure_stream(gateway, stream_name, rtsp_with_creds)
-    return _relay_gateway_response(f"{gateway}/api/stream.mp4?src={stream_name}")
+    audio_source = f"ffmpeg:{rtsp_with_creds}#audio=aac"
+    _go2rtc_ensure_stream(gateway, stream_name, audio_source)
+    return _relay_gateway_response(f"{gateway}/api/stream.mp4?src={stream_name}&mp4=all")
 
 
 @router.post("/cameras/{camera_id}/talkback/send-audio", summary="Send audio to camera speaker")
