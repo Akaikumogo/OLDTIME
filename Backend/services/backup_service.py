@@ -1,430 +1,188 @@
 """
-DB backup va restore xizmati.
-
-- export_database_to_json() — barcha jadval ma'lumotlarini JSON formatga eksport qiladi
-- import_database_from_json(mode='replace') — DB ni butunlay almashtirish
-- import_database_from_json(mode='merge') — mavjud ma'lumotlarga qo'shish, conflict'larni topish
-- apply_merge_resolution() — conflict'larga yechim qo'llash (new_wins/old_wins/per-row)
-
-Format:
-{
-    "version": "1",
-    "exported_at": "2026-05-12T15:30:00",
-    "tables": {
-        "departments": [{"id": "...", "name": "...", ...}, ...],
-        "employees":   [{"id": "...", ...}, ...],
-        ...
-    }
-}
+Backup Management Service
+Superadmin uchun: export/import, merge/hard-set
 """
-from __future__ import annotations
 
 import json
-import logging
+import gzip
+import hashlib
 import os
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Iterable
-
-import psycopg2
-import psycopg2.extras
-
-from db import get_connection
+from typing import Optional, Dict, Tuple
+import logging
 
 logger = logging.getLogger(__name__)
 
-# Eksport va import tartibi muhim: foreign key bog'lanishlar bo'lmagan jadvallar avval keladi
-EXPORT_ORDER: tuple[str, ...] = (
-    "admins",
-    "departments",
-    "positions",
-    "doors",
-    "attendance_policies",
-    "shifts",
-    "holidays",
-    "app_categories",
-    "site_categories",
-    "app_config",
-    "employees",
-    "computers",
-    "employee_device_mappings",
-    "employee_shifts",
-    "attendance_events",
-    "attendance_event_audit_logs",
-    "computer_activity_events",
-    "work_permissions",
-)
-
-# Jadval primary key ustunlari (default: 'id')
-PK_COLUMNS: dict[str, tuple[str, ...]] = {
-    # Agar PK kombinatsiyalangan bo'lsa, shu yerda ko'rsatamiz
-}
+BACKUP_DIR = os.getenv("BACKUP_DIR", "./backups")
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
-def _pk_for(table: str) -> tuple[str, ...]:
-    return PK_COLUMNS.get(table, ("id",))
+def _calculate_file_hash(file_path: str) -> str:
+    """SHA256 hash'ini hisoblash"""
+    sha256 = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
 
 
-def _backup_dir() -> Path:
-    path = os.getenv("BACKUP_DIR")
-    if not path:
-        path = str(Path(__file__).resolve().parents[1] / "backups")
-    p = Path(path)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+def export_backup(cur, backup_type: str = "FULL", backup_name: Optional[str] = None) -> Dict:
+    """Serverdan backup export qilish"""
+    if not backup_name:
+        backup_name = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    backup_data = {}
 
-def _serialize_value(value: Any) -> Any:
-    if isinstance(value, (datetime,)):
-        return value.isoformat()
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("utf-8", errors="replace")
-    return value
+    if backup_type in ["FULL", "EMPLOYEES"]:
+        cur.execute("""
+            SELECT id, full_name, email, phone, employee_code, department_id,
+                   position_id, hire_date, is_active
+            FROM employees ORDER BY created_at
+        """)
+        backup_data["employees"] = [
+            {
+                "id": str(row[0]), "full_name": row[1], "email": row[2],
+                "phone": row[3], "employee_code": row[4],
+                "department_id": str(row[5]) if row[5] else None,
+                "position_id": str(row[6]) if row[6] else None,
+                "hire_date": str(row[7]) if row[7] else None, "is_active": row[8],
+            }
+            for row in cur.fetchall()
+        ]
 
+        cur.execute("SELECT id, name, description FROM departments ORDER BY created_at")
+        backup_data["departments"] = [
+            {"id": str(row[0]), "name": row[1], "description": row[2]}
+            for row in cur.fetchall()
+        ]
 
-def _serialize_row(row: dict) -> dict:
-    return {k: _serialize_value(v) for k, v in row.items()}
+        cur.execute("SELECT id, name, description FROM positions ORDER BY created_at")
+        backup_data["positions"] = [
+            {"id": str(row[0]), "name": row[1], "description": row[2]}
+            for row in cur.fetchall()
+        ]
 
+    if backup_type in ["FULL", "ATTENDANCE"]:
+        cur.execute("""
+            SELECT id, employee_id, door_id, event_type, event_timestamp,
+                   employee_name, card_id
+            FROM attendance_events ORDER BY event_timestamp DESC LIMIT 100000
+        """)
+        backup_data["attendance_events"] = [
+            {
+                "id": str(row[0]), "employee_id": str(row[1]) if row[1] else None,
+                "door_id": str(row[2]), "event_type": row[3],
+                "event_timestamp": str(row[4]), "employee_name": row[5], "card_id": row[6],
+            }
+            for row in cur.fetchall()
+        ]
 
-def export_database_to_json() -> dict:
-    """Barcha jadvallarni JSON formatga eksport qiladi."""
-    tables: dict[str, list[dict]] = {}
-    with get_connection() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            for table in EXPORT_ORDER:
-                try:
-                    cur.execute(f"SELECT * FROM {table} ORDER BY 1")
-                    rows = cur.fetchall()
-                    tables[table] = [_serialize_row(dict(r)) for r in rows]
-                except psycopg2.errors.UndefinedTable:
-                    conn.rollback()
-                    tables[table] = []
-                except Exception as exc:
-                    conn.rollback()
-                    logger.warning("Table %s skipped: %s", table, exc)
-                    tables[table] = []
+    backup_data["metadata"] = {
+        "backup_type": backup_type,
+        "created_at": datetime.now().isoformat(),
+        "total_records": sum(len(v) for k, v in backup_data.items() if k != "metadata"),
+        "employees_count": len(backup_data.get("employees", [])),
+        "attendance_events": len(backup_data.get("attendance_events", [])),
+    }
+
+    backup_path = os.path.join(BACKUP_DIR, f"{backup_name}.json.gz")
+    with gzip.open(backup_path, "wt", encoding="utf-8") as f:
+        json.dump(backup_data, f)
+
+    file_size = os.path.getsize(backup_path)
+    file_hash = _calculate_file_hash(backup_path)
+    logger.info(f"✅ Backup exported: {backup_name}")
 
     return {
-        "version": "1",
-        "exported_at": datetime.utcnow().isoformat() + "Z",
-        "tables": tables,
+        "backup_name": backup_name,
+        "backup_type": backup_type,
+        "file_path": backup_path,
+        "file_size": file_size,
+        "file_hash": file_hash,
+        "created_at": datetime.now().isoformat(),
+        "records_count": backup_data["metadata"]["total_records"],
+        "employees_count": backup_data["metadata"]["employees_count"],
+        "attendance_events": backup_data["metadata"]["attendance_events"],
     }
 
 
-def create_backup_file() -> Path:
-    """JSON backup yaratadi va BACKUP_DIR ga saqlaydi. Yaratilgan fayl yo'lini qaytaradi."""
-    payload = export_database_to_json()
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"workplus_backup_{ts}.json"
-    path = _backup_dir() / filename
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+def import_backup(cur, backup_file_path: str, restore_type: str = "MERGE") -> Dict:
+    """Backup'ni serverga import qilish (MERGE yoki HARD_SET)"""
+    if not os.path.exists(backup_file_path):
+        raise FileNotFoundError(f"Backup file not found: {backup_file_path}")
+
+    with gzip.open(backup_file_path, "rt", encoding="utf-8") as f:
+        backup_data = json.load(f)
+
+    stats = {"rows_merged": 0, "rows_deleted": 0, "rows_created": 0}
+
+    if restore_type == "HARD_SET":
+        logger.warning("🗑️  HARD_SET mode: deleting existing data")
+        cur.execute("DELETE FROM attendance_events")
+        cur.execute("DELETE FROM employees")
+        cur.execute("DELETE FROM departments")
+        cur.execute("DELETE FROM positions")
+
+    if "departments" in backup_data:
+        for dept in backup_data["departments"]:
+            cur.execute("""
+                INSERT INTO departments (id, name, description) VALUES (%s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+            """, (dept["id"], dept["name"], dept.get("description")))
+        stats["rows_created"] += len(backup_data["departments"])
+
+    if "positions" in backup_data:
+        for pos in backup_data["positions"]:
+            cur.execute("""
+                INSERT INTO positions (id, name, description) VALUES (%s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+            """, (pos["id"], pos["name"], pos.get("description")))
+        stats["rows_created"] += len(backup_data["positions"])
+
+    if "employees" in backup_data:
+        for emp in backup_data["employees"]:
+            cur.execute("""
+                INSERT INTO employees (id, full_name, email, phone, employee_code,
+                    department_id, position_id, hire_date, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET full_name=EXCLUDED.full_name,
+                    email=EXCLUDED.email, updated_at=NOW()
+            """, (emp["id"], emp["full_name"], emp.get("email"), emp.get("phone"),
+                  emp.get("employee_code"), emp.get("department_id"),
+                  emp.get("position_id"), emp.get("hire_date"), emp.get("is_active", True)))
+        stats["rows_created"] += len(backup_data["employees"])
+
+    if "attendance_events" in backup_data:
+        for att in backup_data["attendance_events"]:
+            cur.execute("""
+                INSERT INTO attendance_events (id, employee_id, door_id, event_type,
+                    event_timestamp, employee_name, card_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+            """, (att["id"], att.get("employee_id"), att["door_id"],
+                  att["event_type"], att["event_timestamp"],
+                  att.get("employee_name"), att.get("card_id")))
+        stats["rows_created"] += len(backup_data["attendance_events"])
+
+    logger.info(f"✅ Backup imported ({restore_type}): {stats}")
+    return stats
 
 
-def list_backup_files() -> list[dict]:
-    """BACKUP_DIR dagi barcha backup fayllar ro'yxati."""
-    directory = _backup_dir()
-    files = []
-    for item in directory.iterdir():
-        if not item.is_file():
-            continue
-        if not (item.suffix in (".json", ".sql") or item.name.startswith("workplus_backup_")):
-            continue
-        stat = item.stat()
-        files.append(
-            {
-                "name": item.name,
-                "size_bytes": stat.st_size,
-                "modified_at": stat.st_mtime,
-            }
-        )
-    files.sort(key=lambda f: f["modified_at"], reverse=True)
-    return files
+def list_backups(cur, limit: int = 50, offset: int = 0) -> Tuple[int, list]:
+    """Backup'larning ro'yxatini olish"""
+    cur.execute("SELECT COUNT(*) FROM backup_metadata")
+    total = cur.fetchone()[0]
 
+    cur.execute("""
+        SELECT id, backup_name, backup_type, file_size, created_at,
+               restored_at, restore_type, employees_count, attendance_events
+        FROM backup_metadata ORDER BY created_at DESC LIMIT %s OFFSET %s
+    """, (limit, offset))
 
-def get_backup_path(filename: str) -> Path:
-    """Fayl nomidan to'liq yo'lni qaytaradi. Path traversal'dan himoyalanadi."""
-    safe_name = Path(filename).name  # path traversal himoya
-    path = _backup_dir() / safe_name
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(filename)
-    return path
-
-
-def delete_backup(filename: str) -> bool:
-    try:
-        path = get_backup_path(filename)
-        path.unlink()
-        return True
-    except FileNotFoundError:
-        return False
-
-
-def _validate_payload(payload: Any) -> dict[str, list[dict]]:
-    if not isinstance(payload, dict):
-        raise ValueError("Backup JSON ildizi obyekt bo'lishi kerak")
-    tables = payload.get("tables")
-    if not isinstance(tables, dict):
-        raise ValueError("Backup JSON'da 'tables' obyekt bo'lishi kerak")
-    return tables
-
-
-def detect_conflicts(payload: Any) -> dict[str, list[dict]]:
-    """
-    Yangi ma'lumotlardagi PK lar DB'da mavjud bo'lganlarini topib qaytaradi.
-    Result: { table_name: [ {pk, old_row, new_row}, ... ], ... }
-    """
-    tables = _validate_payload(payload)
-    conflicts: dict[str, list[dict]] = {}
-
-    with get_connection() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            for table in EXPORT_ORDER:
-                new_rows = tables.get(table) or []
-                if not new_rows:
-                    continue
-                pk_cols = _pk_for(table)
-                pk_col = pk_cols[0]
-
-                pk_values = [r.get(pk_col) for r in new_rows if r.get(pk_col) is not None]
-                if not pk_values:
-                    continue
-
-                try:
-                    cur.execute(
-                        f"SELECT * FROM {table} WHERE {pk_col} = ANY(%s)",
-                        (pk_values,),
-                    )
-                    existing = {str(r[pk_col]): _serialize_row(dict(r)) for r in cur.fetchall()}
-                except psycopg2.errors.UndefinedTable:
-                    conn.rollback()
-                    continue
-                except Exception as exc:
-                    conn.rollback()
-                    logger.warning("Conflict scan failed for %s: %s", table, exc)
-                    continue
-
-                table_conflicts = []
-                for new_row in new_rows:
-                    pk_val = new_row.get(pk_col)
-                    if pk_val is None:
-                        continue
-                    key = str(pk_val)
-                    if key in existing:
-                        table_conflicts.append(
-                            {
-                                "pk": key,
-                                "old_row": existing[key],
-                                "new_row": new_row,
-                            }
-                        )
-                if table_conflicts:
-                    conflicts[table] = table_conflicts
-
-    return conflicts
-
-
-def _truncate_all(cur) -> None:
-    """Barcha jadvallarni tozalaydi (RESTART IDENTITY CASCADE)."""
-    # Ters tartibda: foreign key dependent lar avval o'chiriladi
-    for table in reversed(EXPORT_ORDER):
-        try:
-            cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
-        except psycopg2.errors.UndefinedTable:
-            continue
-
-
-def _insert_row(cur, table: str, row: dict) -> None:
-    if not row:
-        return
-    cols = list(row.keys())
-    placeholders = ", ".join(["%s"] * len(cols))
-    col_list = ", ".join(cols)
-    values = [row[c] for c in cols]
-    cur.execute(
-        f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})",
-        values,
-    )
-
-
-def _update_row(cur, table: str, row: dict, pk_col: str) -> None:
-    cols = [c for c in row.keys() if c != pk_col]
-    if not cols:
-        return
-    set_clause = ", ".join(f"{c} = %s" for c in cols)
-    values = [row[c] for c in cols] + [row[pk_col]]
-    cur.execute(
-        f"UPDATE {table} SET {set_clause} WHERE {pk_col} = %s",
-        values,
-    )
-
-
-def import_replace(payload: Any) -> dict:
-    """Butunlay almashtirish: barcha jadvallar tozalanadi va backup'dan to'ldiriladi."""
-    tables = _validate_payload(payload)
-
-    inserted: dict[str, int] = {}
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            _truncate_all(cur)
-            for table in EXPORT_ORDER:
-                rows = tables.get(table) or []
-                count = 0
-                for row in rows:
-                    try:
-                        _insert_row(cur, table, row)
-                        count += 1
-                    except psycopg2.errors.UndefinedTable:
-                        break
-                    except Exception as exc:
-                        logger.warning(
-                            "Insert failed for %s id=%s: %s",
-                            table, row.get("id"), exc,
-                        )
-                        raise
-                inserted[table] = count
-        conn.commit()
-
-    return {"mode": "replace", "inserted": inserted}
-
-
-def import_merge(payload: Any, resolution: str = "new_wins", per_row: dict | None = None) -> dict:
-    """
-    Mavjud ma'lumotlarga qo'shish.
-
-    resolution:
-        - 'new_wins' — conflict bo'lsa, yangi versiya yoziladi
-        - 'old_wins' — conflict bo'lsa, eski qoldiriladi
-        - 'per_row'  — har bir conflict uchun alohida ('keep_old'/'use_new'/'skip')
-
-    per_row format: { table_name: { pk: 'keep_old' | 'use_new' | 'skip' } }
-    """
-    if resolution not in ("new_wins", "old_wins", "per_row"):
-        raise ValueError("resolution must be one of: new_wins, old_wins, per_row")
-    per_row = per_row or {}
-
-    tables = _validate_payload(payload)
-    summary: dict[str, dict[str, int]] = {}
-
-    with get_connection() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            for table in EXPORT_ORDER:
-                new_rows = tables.get(table) or []
-                if not new_rows:
-                    continue
-                pk_col = _pk_for(table)[0]
-
-                pk_values = [r.get(pk_col) for r in new_rows if r.get(pk_col) is not None]
-                if pk_values:
-                    try:
-                        cur.execute(
-                            f"SELECT {pk_col} FROM {table} WHERE {pk_col} = ANY(%s)",
-                            (pk_values,),
-                        )
-                        existing_pks = {str(r[pk_col]) for r in cur.fetchall()}
-                    except psycopg2.errors.UndefinedTable:
-                        conn.rollback()
-                        continue
-                else:
-                    existing_pks = set()
-
-                inserted = 0
-                updated = 0
-                skipped = 0
-
-                for row in new_rows:
-                    pk_val = row.get(pk_col)
-                    key = str(pk_val) if pk_val is not None else None
-                    is_conflict = key is not None and key in existing_pks
-
-                    if not is_conflict:
-                        try:
-                            _insert_row(cur, table, row)
-                            inserted += 1
-                        except Exception as exc:
-                            logger.warning(
-                                "Insert failed for %s id=%s: %s",
-                                table, pk_val, exc,
-                            )
-                            raise
-                        continue
-
-                    # Conflict — yechim
-                    choice = resolution
-                    if resolution == "per_row":
-                        choice = (per_row.get(table) or {}).get(key, "keep_old")
-                        if choice == "use_new":
-                            choice = "new_wins"
-                        elif choice == "skip":
-                            skipped += 1
-                            continue
-                        else:
-                            choice = "old_wins"
-
-                    if choice == "new_wins":
-                        _update_row(cur, table, row, pk_col)
-                        updated += 1
-                    else:
-                        skipped += 1
-
-                summary[table] = {
-                    "inserted": inserted,
-                    "updated": updated,
-                    "skipped": skipped,
-                }
-        conn.commit()
-
-    return {"mode": "merge", "resolution": resolution, "summary": summary}
-
-
-# ---------- Logs ----------
-
-
-def _log_dir() -> Path | None:
-    path = os.getenv("LOG_DIR")
-    if not path:
-        return None
-    p = Path(path)
-    if not p.exists() or not p.is_dir():
-        return None
-    return p
-
-
-def list_log_files() -> list[dict]:
-    directory = _log_dir()
-    if directory is None:
-        return []
-    files = []
-    for item in directory.iterdir():
-        if not item.is_file():
-            continue
-        stat = item.stat()
-        files.append(
-            {
-                "name": item.name,
-                "size_bytes": stat.st_size,
-                "modified_at": stat.st_mtime,
-            }
-        )
-    files.sort(key=lambda f: f["modified_at"], reverse=True)
-    return files
-
-
-def get_log_path(filename: str) -> Path:
-    directory = _log_dir()
-    if directory is None:
-        raise FileNotFoundError("LOG_DIR not configured")
-    safe_name = Path(filename).name
-    path = directory / safe_name
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(filename)
-    return path
-
-
-def read_log_tail(filename: str, lines: int = 200) -> Iterable[str]:
-    path = get_log_path(filename)
-    with path.open("r", encoding="utf-8", errors="replace") as f:
-        all_lines = f.readlines()
-    return all_lines[-lines:]
+    return total, [
+        {"id": str(row[0]), "backup_name": row[1], "backup_type": row[2],
+         "file_size": row[3], "created_at": str(row[4]),
+         "restored_at": str(row[5]) if row[5] else None, "restore_type": row[6],
+         "employees_count": row[7], "attendance_events": row[8]}
+        for row in cur.fetchall()
+    ]

@@ -17,7 +17,9 @@
       "Bash(python -m py_compile api/routers/ai_camera.py services/isapi_talkback.py)",
       "Bash(python -m py_compile services/isapi_talkback.py api/routers/ai_camera.py)",
       "Bash(findstr \"APIRouter\" *.py)",
-      "Bash(findstr \"include_router\" router.py)"
+      "Bash(findstr \"include_router\" router.py)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   },
   "primaryModel": "gemini/gemini-1.5-flash-latest"

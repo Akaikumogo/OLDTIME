@@ -1,0 +1,24 @@
+# HumanRecognition Worker Requirements
+# 6GB VRAM uchun optimlashtirilgan
+
+# Core
+torch>=2.0.0,<3.0.0
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+requests>=2.31.0
+
+# Face recognition/embedding
+# Quyidagilardan biri:
+insightface>=0.7.0  # Recommended - lightweight va tezkor
+# yoki
+facenet-pytorch>=2.5.0  # Alternative
+
+# Optional - performance improvements
+scikit-learn>=1.3.0  # Fast K-NN for embedding matching
+tqdm>=4.65.0  # Progress bars
+psutil>=5.9.0  # System monitoring
+
+# Development (optional)
+pytest>=7.4.0
+python-dotenv>=1.0.0

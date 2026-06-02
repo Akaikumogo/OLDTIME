@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  human-recognition-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: human-recognition-worker
+
+    # GPU support (NVIDIA)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    environment:
+      # WorkPlus API
+      WORKPLUS_API_URL: http://workplus-backend:8000
+      AI_CAMERA_AGENT_TOKEN: ${AI_CAMERA_AGENT_TOKEN}
+
+      # Worker settings
+      WORKER_DEVICE: cuda
+      WORKER_VRAM_LIMIT_GB: 6
+      WORKER_FRAME_SKIP: 2
+      WORKER_LOG_LEVEL: INFO
+
+      # Face detection
+      YOLO_FACE_MODEL: yolov8n-face.pt
+      FACE_DETECTION_THRESHOLD: 0.5
+      FACE_SIZE_MIN_PIXELS: 50
+
+      # Embedding & Matching
+      EMBEDDING_DISTANCE_THRESHOLD: 0.6
+      FACE_MATCH_CONFIDENCE_MIN: 0.7
+
+      # Unknown clustering
+      UNKNOWN_CLUSTER_DISTANCE: 0.5
+
+    networks:
+      - workplus-network
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Volumes (logs, cache)
+    volumes:
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+      - ~/.cache/torch:/root/.cache/torch  # Model cache
+
+    # Resource limits
+    mem_limit: 16g
+    memswap_limit: 16g
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+networks:
+  workplus-network:
+    external: true
+    name: workplus-network
+
+volumes:
+  logs:
+  cache:

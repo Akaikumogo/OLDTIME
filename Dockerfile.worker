@@ -1,0 +1,43 @@
+# HumanRecognition Worker Docker Image
+# NVIDIA GPU required for optimal performance
+
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    wget \
+    git \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python aliases
+RUN ln -s /usr/bin/python3.10 /usr/bin/python && \
+    ln -s /usr/bin/pip3 /usr/bin/pip
+
+# Copy requirements
+COPY requirements_worker.txt .
+
+# Install Python packages
+RUN pip install --no-cache-dir -r requirements_worker.txt
+
+# Copy worker
+COPY human_recognition_worker.py .
+
+# Pre-download models (optional - increases image size but saves startup time)
+# RUN python -c "from ultralytics import YOLO; YOLO('yolov8n-face.pt')"
+# RUN python -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l').prepare(ctx_id=0)"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/internal/cameras/active', timeout=5)" || exit 1
+
+# Run worker
+CMD ["python", "human_recognition_worker.py"]
