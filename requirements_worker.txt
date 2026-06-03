@@ -9,10 +9,8 @@ numpy>=1.24.0
 requests>=2.31.0
 
 # Face recognition/embedding
-# Quyidagilardan biri:
-insightface>=0.7.0  # Recommended - lightweight va tezkor
-# yoki
-facenet-pytorch>=2.5.0  # Alternative
+insightface>=0.7.0  # buffalo_l modeli (worker + enroll bir xil ishlatadi)
+onnxruntime-gpu>=1.16.0  # GPU uchun. GPU bo'lmasa: onnxruntime>=1.16.0
 
 # Optional - performance improvements
 scikit-learn>=1.3.0  # Fast K-NN for embedding matching

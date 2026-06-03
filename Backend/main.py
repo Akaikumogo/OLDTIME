@@ -12,6 +12,7 @@ from api.router import api_router
 from core.docs import tags_metadata
 from services.db_init import initialize_database
 from services.hikvision_service import HikvisionPollingEngine
+from services.service_supervisor import ServiceSupervisor
 from services.storage_service import (
     get_employee_photo_dir,
     get_face_captures_dir,
@@ -27,9 +28,22 @@ async def lifespan(app: FastAPI):
         engine.start()
     except Exception as exc:
         print(f"[WARN] Hikvision poller failed to start: {exc}")
+
+    # go2rtc + odam aniqlash worker'ini backend o'zi ko'taradi
+    supervisor = ServiceSupervisor()
+    app.state.service_supervisor = supervisor
+    try:
+        supervisor.start_all()
+    except Exception as exc:
+        print(f"[WARN] Service supervisor failed to start: {exc}")
+
     try:
         yield
     finally:
+        try:
+            supervisor.stop_all()
+        except Exception as exc:
+            print(f"[WARN] Service supervisor stop failed: {exc}")
         try:
             engine.stop()
         except Exception as exc:

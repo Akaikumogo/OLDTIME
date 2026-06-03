@@ -4,9 +4,14 @@ import type { ColumnsType } from 'antd/es/table';
 import { RefreshCw } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useQuery } from '@tanstack/react-query';
-import apiService from '@/services/api';
+import apiService, { type AttendanceDailyRow } from '@/services/api';
 import { DateFilter } from '@/components/filters/DateFilter';
 import { formatDisplayDate } from '@/utils/date';
+import {
+  ATTENDANCE_STATUS_COLORS,
+  ATTENDANCE_STATUS_LABELS
+} from '@/features/dashboard/constants';
+import { secondsBetweenClockTimes, secondsToHuman } from '@/utils/time';
 
 const DailyAttendance = () => {
   const [page, setPage] = useState(1);
@@ -16,15 +21,17 @@ const DailyAttendance = () => {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['daily-attendance', page, limit, selectedDate],
     queryFn: () =>
-      apiService.listAttendanceEvents({
+      apiService.listAttendanceDaily({
         page,
         limit,
         date_from: selectedDate,
-        date_to: selectedDate
+        date_to: selectedDate,
+        sort: 'date',
+        order: 'desc'
       })
   });
 
-  const columns: ColumnsType<any> = [
+  const columns: ColumnsType<AttendanceDailyRow> = [
     {
       title: 'ID',
       dataIndex: 'id',
@@ -34,11 +41,6 @@ const DailyAttendance = () => {
     {
       title: 'Xodim',
       dataIndex: ['employee', 'full_name'],
-      render: (name: string) => name || '-'
-    },
-    {
-      title: 'Bo\'lim',
-      dataIndex: ['employee', 'department', 'name'],
       render: (name: string) => name || '-'
     },
     {
@@ -63,25 +65,42 @@ const DailyAttendance = () => {
       title: 'Ish vaqti',
       dataIndex: 'work_seconds',
       width: 100,
-      render: (seconds: number) => {
-        const hours = Math.floor(seconds / 3600);
-        const mins = Math.floor((seconds % 3600) / 60);
-        return `${hours}h ${mins}m`;
-      }
+      render: (_value, row) =>
+        secondsToHuman(
+          row.segments
+            .filter((segment) => segment.type === 'work')
+            .reduce(
+              (sum, segment) =>
+                sum + secondsBetweenClockTimes(segment.start, segment.end),
+              0
+            )
+        )
+    },
+    {
+      title: 'Kompyuter',
+      dataIndex: 'computer_seconds',
+      width: 110,
+      render: (seconds?: number) => secondsToHuman(seconds ?? 0)
     },
     {
       title: 'Holat',
-      dataIndex: 'status',
-      width: 100,
-      render: (status: string) => {
-        const colorMap: Record<string, string> = {
-          present: 'green',
-          absent: 'red',
-          late: 'orange',
-          half_day: 'gold'
-        };
-        return <Tag color={colorMap[status] || 'default'}>{status}</Tag>;
-      }
+      dataIndex: 'statuses',
+      width: 180,
+      render: (statuses: string[]) => (
+        <div className="flex flex-wrap gap-1">
+          {(statuses?.length ? statuses : ['entry']).slice(0, 3).map((status) => (
+            <Tag key={status} color={ATTENDANCE_STATUS_COLORS[status] || 'default'}>
+              {ATTENDANCE_STATUS_LABELS[status] || status}
+            </Tag>
+          ))}
+        </div>
+      )
+    },
+    {
+      title: 'Top ilovalar',
+      dataIndex: 'top_apps',
+      width: 180,
+      render: (apps?: string[]) => apps?.join(', ') || '-'
     }
   ];
 

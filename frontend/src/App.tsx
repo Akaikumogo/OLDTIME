@@ -8,6 +8,8 @@ import { ConfigProvider } from 'antd';
 import { getAntdTheme } from './theme/colors';
 import { useApp } from './Providers/Configuration';
 
+const router = createBrowserRouter(routes);
+
 const App = () => {
   const [showSplash, setShowSplash] = useState(false);
 
@@ -23,10 +25,12 @@ const App = () => {
   return (
     <>
       <AnimatePresence mode="sync">
-        {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
-        <ConfigProvider theme={getAntdTheme(darkOrLight)}>
+        {showSplash && (
+          <SplashScreen key="splash" onFinish={() => setShowSplash(false)} />
+        )}
+        <ConfigProvider key="app-shell" theme={getAntdTheme(darkOrLight)}>
           {!showSplash && (
-            <RouterProvider router={createBrowserRouter(routes)} />
+            <RouterProvider router={router} />
           )}
         </ConfigProvider>
       </AnimatePresence>

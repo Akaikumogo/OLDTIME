@@ -1,15 +1,16 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg2
 
 from db import get_connection
 
 logger = logging.getLogger(__name__)
+TASHKENT_TZ = timezone(timedelta(hours=5), name="Asia/Tashkent")
 
 
 def fetch_active_doors():
@@ -229,7 +230,13 @@ def parse_datetime_input(value: str) -> datetime:
 
 
 def _to_app_timezone(value: datetime) -> datetime:
-    app_tz = ZoneInfo(os.getenv("WORKPLUS_TIMEZONE", "Asia/Tashkent"))
+    timezone_name = os.getenv("WORKPLUS_TIMEZONE", "Asia/Tashkent")
+    try:
+        app_tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        if timezone_name != "Asia/Tashkent":
+            raise
+        app_tz = TASHKENT_TZ
     if value.tzinfo is None:
         return value
     return value.astimezone(app_tz).replace(tzinfo=None)

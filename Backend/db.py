@@ -25,16 +25,32 @@ def _make_pool() -> psycopg2_pool.ThreadedConnectionPool:
     if not db_password:
         raise RuntimeError("DB_PASSWORD environment variable is not configured")
     minconn, maxconn = _read_pool_size()
-    return psycopg2_pool.ThreadedConnectionPool(
-        minconn=minconn,
-        maxconn=maxconn,
-        host=os.getenv("DB_HOST", "localhost"),
-        database=os.getenv("DB_NAME", "workplus"),
-        user=os.getenv("DB_USER", "postgres"),
-        password=db_password,
-        port=os.getenv("DB_PORT", "5432"),
-        connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "5")),
-    )
+    try:
+        return psycopg2_pool.ThreadedConnectionPool(
+            minconn=minconn,
+            maxconn=maxconn,
+            host=os.getenv("DB_HOST", "localhost"),
+            database=os.getenv("DB_NAME", "workplus"),
+            user=os.getenv("DB_USER", "postgres"),
+            password=db_password,
+            port=os.getenv("DB_PORT", "5432"),
+            connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "5")),
+        )
+    except UnicodeDecodeError as exc:
+        # Windows'da (ru lokal) PostgreSQL xato xabari cp1251'da qaytadi va
+        # psycopg2 uni UTF-8 deb o'qiyolmaydi. Asl xabarni ochib beramiz.
+        import locale
+
+        raw = getattr(exc, "object", b"")
+        message = str(exc)
+        if isinstance(raw, (bytes, bytearray)):
+            for enc in (locale.getpreferredencoding(False), "cp1251", "latin-1"):
+                try:
+                    message = bytes(raw).decode(enc, "replace").strip()
+                    break
+                except Exception:
+                    continue
+        raise RuntimeError(f"PostgreSQL ulanish xatosi: {message}") from None
 
 
 def _get_pool() -> psycopg2_pool.ThreadedConnectionPool:

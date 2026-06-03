@@ -36,24 +36,27 @@ except ImportError:
 # CONFIGURATION
 # ============================================================================
 
+# Windows cp1251 konsolда emoji loglar yiqilmasligi uchun UTF-8 ga o'tkazamiz
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("human_recognition_worker.log"),
+        logging.FileHandler("human_recognition_worker.log", encoding="utf-8"),
     ],
 )
 
-# WorkPlus API sozlamalari
-API_BASE = os.getenv("WORKPLUS_API_URL", "http://localhost:8000").rstrip("/")
-API_TOKEN = os.getenv("AI_CAMERA_AGENT_TOKEN", "")
+# WorkPlus API sozlamalari (auth yo'q — localhost'da backend bilan birga ishlaydi)
+API_BASE = os.getenv("WORKPLUS_API_URL", "http://localhost:8001").rstrip("/")
 API_TIMEOUT = 15
-
-if not API_TOKEN or len(API_TOKEN) < 32:
-    logger.error("❌ AI_CAMERA_AGENT_TOKEN not configured or too short")
-    sys.exit(1)
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000")
 
 # GPU/VRAM sozlamalari
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -63,14 +66,25 @@ if DEVICE == "cuda":
     logger.info(f"💾 VRAM limit: {VRAM_LIMIT_GB}GB")
 
 # Model sozlamalari (6GB VRAM uchun)
-YOLO_MODEL = "yolov8n-face.pt"  # Nano face detection
+YOLO_MODEL = os.getenv("WORKER_PERSON_MODEL", "yolov8n.pt")
 POSE_MODEL = None  # Faolasini: yolov8n-pose.pt (agar kerak bo'lsa)
 FACE_DETECTION_THRESHOLD = 0.5
-BODY_DETECTION_THRESHOLD = 0.4
+PERSON_CLASS_ID = int(os.getenv("WORKER_PERSON_CLASS_ID", "0"))
+BODY_DETECTION_THRESHOLD = float(os.getenv("WORKER_PERSON_DETECTION_THRESHOLD", "0.50"))
+PERSON_IMGSZ = int(os.getenv("WORKER_PERSON_IMGSZ", "960"))
+BODY_SIZE_MIN = int(os.getenv("WORKER_PERSON_MIN_SIZE", "40"))
+BODY_MAX_DETECTIONS = int(os.getenv("WORKER_PERSON_MAX_DETECTIONS", "20"))
+TRACK_IOU_THRESHOLD = float(os.getenv("WORKER_TRACK_IOU_THRESHOLD", "0.2"))
+TRACK_CENTER_DISTANCE = float(os.getenv("WORKER_TRACK_CENTER_DISTANCE", "160"))
+TRACK_STALE_SECONDS = float(os.getenv("WORKER_TRACK_STALE_SECONDS", "4"))
+DETECTION_SEND_INTERVAL_SECONDS = float(os.getenv("WORKER_DETECTION_SEND_INTERVAL_SECONDS", "1"))
+FRAME_SKIP = max(1, int(os.getenv("WORKER_FRAME_SKIP", "3" if DEVICE == "cpu" else "2")))
 
 # Embedding sozlamalari
-EMBEDDING_DIM = 512  # FaceNet512
-EMBEDDING_DISTANCE_THRESHOLD = 0.6  # Euclidean distance
+EMBEDDING_DIM = 512  # FaceNet512 / InsightFace buffalo_l
+EMBEDDING_DISTANCE_THRESHOLD = 0.6  # (eski) Euclidean
+FACE_MATCH_COSINE_MIN = float(os.getenv("FACE_MATCH_COSINE_MIN", "0.35"))  # cosine o'xshashlik chegarasi
+EMBEDDING_REFRESH_SECONDS = int(os.getenv("WORKER_EMBEDDING_REFRESH_SECONDS", "300"))  # embeddinglarni qayta yuklash
 FACE_SIZE_MIN = 50  # Pixels - juda kichik yuzlarni o'tkazib yuborish
 
 # Unknown person clustering
@@ -89,6 +103,7 @@ class Detection:
     bbox: Dict  # {"x": int, "y": int, "w": int, "h": int}
     embedding: Optional[List[float]] = None  # Face embedding (FaceNet512)
     face_snapshot: Optional[np.ndarray] = None  # Cropped face image
+    track_id: Optional[str] = None
 
 
 @dataclass
@@ -132,7 +147,7 @@ class ModelManager:
         logger.info(f"📦 Loading YOLOv8 face detector...")
         try:
             self.face_model = YOLO(YOLO_MODEL).to(self.device)
-            self.face_model.conf = FACE_DETECTION_THRESHOLD
+            self.face_model.conf = BODY_DETECTION_THRESHOLD
             logger.info(f"✅ Face detector loaded")
         except Exception as e:
             logger.error(f"❌ Failed to load face detector: {e}")
@@ -198,6 +213,51 @@ class ModelManager:
             logger.error(f"❌ Face detection error: {e}")
             return []
 
+    def detect_people(self, frame: np.ndarray) -> List[Detection]:
+        """Frame'da odamlarni aniqlash."""
+        if not self.face_model:
+            self.load_face_detector()
+
+        try:
+            fh, fw = frame.shape[0], frame.shape[1]
+            results = self.face_model(
+                frame,
+                conf=BODY_DETECTION_THRESHOLD,
+                classes=[PERSON_CLASS_ID],
+                imgsz=PERSON_IMGSZ,
+                verbose=False,
+            )
+            detections = []
+
+            for result in results:
+                for box in result.boxes:
+                    conf = float(box.conf)
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    w, h = x2 - x1, y2 - y1
+                    if w < BODY_SIZE_MIN or h < BODY_SIZE_MIN:
+                        continue
+
+                    detections.append(
+                        Detection(
+                            detection_type="BODY",
+                            confidence=conf,
+                            bbox={
+                                "x": int(x1),
+                                "y": int(y1),
+                                "w": int(w),
+                                "h": int(h),
+                                "fw": fw,
+                                "fh": fh,
+                            },
+                        )
+                    )
+
+            detections.sort(key=lambda item: item.confidence, reverse=True)
+            return detections[:BODY_MAX_DETECTIONS]
+        except Exception as e:
+            logger.error(f"Person detection error: {e}")
+            return []
+
     def extract_embedding(self, face_crop: np.ndarray) -> Optional[List[float]]:
         """Yuzdan embedding chiqarish (512-dimensional vector)"""
         if not self.embedding_extractor:
@@ -239,43 +299,73 @@ class FaceMatchingEngine:
         self.last_update = None
         self._refresh_embeddings()
 
-    def _refresh_embeddings(self):
-        """DB'dan employee embedding'larini yuklash"""
+    def _refresh_embeddings(self, force: bool = False):
+        """Backend'dan barcha xodim embedding'larini yuklab, cosine uchun normalizatsiya qiladi."""
+        if (
+            not force
+            and self.last_update
+            and (datetime.now() - self.last_update).total_seconds() < EMBEDDING_REFRESH_SECONDS
+        ):
+            return
         try:
-            # TODO: Aqli refreshing
+            response = requests.get(
+                f"{API_BASE}/internal/face-embeddings",
+                timeout=API_TIMEOUT,
+            )
+            response.raise_for_status()
+            rows = response.json().get("data", [])
+
+            grouped: Dict[str, List[np.ndarray]] = {}
+            for row in rows:
+                emp_id = row.get("employee_id")
+                vec = np.asarray(row.get("embedding") or [], dtype=np.float32)
+                if emp_id is None or vec.size == 0:
+                    continue
+                norm = np.linalg.norm(vec)
+                if norm == 0:
+                    continue
+                grouped.setdefault(emp_id, []).append(vec / norm)  # L2-normalized
+
+            self.employee_embeddings = grouped
             self.last_update = datetime.now()
-            logger.info(f"🔄 Employee embeddings refreshed")
+            logger.info(
+                f"🔄 Embeddings refreshed: {len(grouped)} employees, "
+                f"{sum(len(v) for v in grouped.values())} vectors"
+            )
         except Exception as e:
             logger.error(f"❌ Failed to refresh embeddings: {e}")
 
     def find_best_employee_match(
         self,
         embedding: List[float],
-        min_confidence: float = 0.7
+        min_similarity: float = FACE_MATCH_COSINE_MIN,
     ) -> Optional[Tuple[str, float]]:
         """
-        Embedding'ni employee'ning yuzlariga taqqoslash
-        Qaytaradi: (employee_id, confidence) yoki None agar topilmasa
+        Embedding'ni xodim yuzlariga cosine o'xshashlik bilan taqqoslaydi.
+        (InsightFace embeddinglari normalizatsiyalangan — cosine to'g'ri o'lchov.)
+        Qaytaradi: (employee_id, similarity) yoki None.
         """
         if not embedding or not self.employee_embeddings:
             return None
 
-        best_employee = None
-        best_distance = float('inf')
+        query = np.asarray(embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(query)
+        if q_norm == 0:
+            return None
+        query = query / q_norm
 
-        for employee_id, embeddings in self.employee_embeddings.items():
-            for emp_embedding in embeddings:
-                # Euclidean distance
-                distance = np.linalg.norm(np.array(embedding) - np.array(emp_embedding))
-                if distance < best_distance:
-                    best_distance = distance
+        best_employee = None
+        best_similarity = -1.0
+
+        for employee_id, vectors in self.employee_embeddings.items():
+            for emp_vec in vectors:
+                similarity = float(np.dot(query, emp_vec))  # cosine (ikkalasi normalized)
+                if similarity > best_similarity:
+                    best_similarity = similarity
                     best_employee = employee_id
 
-        # Distance -> confidence conversion
-        confidence = max(0, 1 - (best_distance / 2.0))
-
-        if confidence >= min_confidence and best_employee:
-            return (best_employee, confidence)
+        if best_employee and best_similarity >= min_similarity:
+            return (best_employee, best_similarity)
 
         return None
 
@@ -335,13 +425,14 @@ class CameraStreamHandler:
 
         self.cap = None
         self.active_tracks: Dict[str, Track] = {}
+        self.last_sent_by_track: Dict[str, datetime] = {}
         self.next_track_id = 0
         self.stop_event = Event()
         self.thread = None
 
         self.stats = {
             "frames_processed": 0,
-            "faces_detected": 0,
+            "persons_detected": 0,
             "employees_matched": 0,
             "unknowns_detected": 0,
             "errors": 0,
@@ -366,25 +457,41 @@ class CameraStreamHandler:
             self.cap.release()
         logger.info(f"⏹️  Camera stream stopped: {self.camera_name}")
 
+    def _open_capture(self) -> bool:
+        if self.cap:
+            self.cap.release()
+        self.cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        return bool(self.cap and self.cap.isOpened())
+
     def _run(self):
         """Main loop"""
-        self.cap = cv2.VideoCapture(self.rtsp_url)
-        if not self.cap.isOpened():
+        while not self.stop_event.is_set() and not self._open_capture():
             logger.error(f"❌ Failed to open camera: {self.camera_name}")
             self.stats["errors"] += 1
-            return
+            time.sleep(5)
 
-        frame_skip = 2  # Har 2-frame'ni qayta ishlash (tezlik uchun)
+        frame_skip = FRAME_SKIP
         frame_count = 0
+        consecutive_read_errors = 0
 
         while not self.stop_event.is_set():
             ret, frame = self.cap.read()
             if not ret:
                 logger.warning(f"⚠️  Frame read error: {self.camera_name}")
                 self.stats["errors"] += 1
+                consecutive_read_errors += 1
+                if consecutive_read_errors >= 5:
+                    logger.warning(f"Reconnecting camera stream: {self.camera_name}")
+                    self._open_capture()
+                    consecutive_read_errors = 0
                 time.sleep(1)
                 continue
 
+            consecutive_read_errors = 0
             frame_count += 1
             if frame_count % frame_skip != 0:
                 continue
@@ -398,67 +505,168 @@ class CameraStreamHandler:
 
             time.sleep(0.01)  # 100 FPS max (6GB VRAM uchun)
 
+    @staticmethod
+    def _bbox_iou(first: Dict, second: Dict) -> float:
+        ax1 = float(first.get("x", 0))
+        ay1 = float(first.get("y", 0))
+        ax2 = ax1 + float(first.get("w", 0))
+        ay2 = ay1 + float(first.get("h", 0))
+        bx1 = float(second.get("x", 0))
+        by1 = float(second.get("y", 0))
+        bx2 = bx1 + float(second.get("w", 0))
+        by2 = by1 + float(second.get("h", 0))
+
+        inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+        intersection = inter_w * inter_h
+        if intersection <= 0:
+            return 0.0
+
+        first_area = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        second_area = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = first_area + second_area - intersection
+        if union <= 0:
+            return 0.0
+        return intersection / union
+
+    @staticmethod
+    def _center_distance(first: Dict, second: Dict) -> float:
+        ax = float(first.get("x", 0)) + float(first.get("w", 0)) / 2
+        ay = float(first.get("y", 0)) + float(first.get("h", 0)) / 2
+        bx = float(second.get("x", 0)) + float(second.get("w", 0)) / 2
+        by = float(second.get("y", 0)) + float(second.get("h", 0)) / 2
+        return float(np.hypot(ax - bx, ay - by))
+
+    def _match_track(self, detection: Detection, used_track_ids: set[str]) -> Optional[str]:
+        best_iou = 0.0
+        best_iou_track = None
+        best_distance = float("inf")
+        best_distance_track = None
+
+        for track_id, track in self.active_tracks.items():
+            if track_id in used_track_ids or not track.detections:
+                continue
+
+            last_bbox = track.detections[-1].bbox
+            iou = self._bbox_iou(detection.bbox, last_bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_iou_track = track_id
+
+            distance = self._center_distance(detection.bbox, last_bbox)
+            if distance < best_distance:
+                best_distance = distance
+                best_distance_track = track_id
+
+        if best_iou_track and best_iou >= TRACK_IOU_THRESHOLD:
+            return best_iou_track
+        if best_distance_track and best_distance <= TRACK_CENTER_DISTANCE:
+            return best_distance_track
+        return None
+
+    def _assign_tracks(self, detections: List[Detection], now: datetime) -> set[str]:
+        active_track_ids: set[str] = set()
+
+        for detection in sorted(detections, key=lambda item: item.bbox.get("x", 0)):
+            track_id = self._match_track(detection, active_track_ids)
+            if not track_id:
+                self.next_track_id += 1
+                track_id = f"body-{self.next_track_id:06d}"
+                self.active_tracks[track_id] = Track(
+                    track_id=track_id,
+                    detection_type=detection.detection_type,
+                    first_seen=now,
+                    last_seen=now,
+                )
+
+            track = self.active_tracks[track_id]
+            detection.track_id = track_id
+            track.detections.append(detection)
+            track.last_seen = now
+            active_track_ids.add(track_id)
+
+        return active_track_ids
+
+    def _should_send_track(self, track_id: str, now: datetime) -> bool:
+        last_sent = self.last_sent_by_track.get(track_id)
+        if last_sent and (now - last_sent).total_seconds() < DETECTION_SEND_INTERVAL_SECONDS:
+            return False
+        self.last_sent_by_track[track_id] = now
+        return True
+
+    def _expire_tracks(self, now: datetime, active_track_ids: set[str]):
+        for track_id, track in list(self.active_tracks.items()):
+            if track_id in active_track_ids:
+                continue
+            if (now - track.last_seen).total_seconds() <= TRACK_STALE_SECONDS:
+                continue
+
+            last_detection = track.detections[-1] if track.detections else None
+            if last_detection:
+                last_detection.track_id = track_id
+                self._send_detection(
+                    None,
+                    last_detection,
+                    confidence=last_detection.confidence,
+                    seen_at=track.last_seen,
+                    disappeared_at=now,
+                )
+
+            self.active_tracks.pop(track_id, None)
+            self.last_sent_by_track.pop(track_id, None)
+
     def _process_frame(self, frame: np.ndarray):
         """Bitta frame'ni qayta ishlash"""
-        # Face detection
-        detections = self.model_manager.detect_faces(frame)
+        detections = self.model_manager.detect_people(frame)
+        now = datetime.now()
+        active_track_ids = self._assign_tracks(detections, now)
+        self._expire_tracks(now, active_track_ids)
+
         if not detections:
             return
 
-        self.stats["faces_detected"] += len(detections)
+        self.stats["persons_detected"] += len(detections)
 
-        # Embedding extraction va matching
         for det in detections:
-            if det.face_snapshot is None:
+            if not det.track_id or not self._should_send_track(det.track_id, now):
                 continue
 
-            embedding = self.model_manager.extract_embedding(det.face_snapshot)
-            if not embedding:
-                continue
-
-            det.embedding = embedding
-
-            # Employee matching
-            match = self.matching_engine.find_best_employee_match(embedding)
-
-            if match:
-                employee_id, confidence = match
-                self.stats["employees_matched"] += 1
-                self._send_detection(employee_id, det, confidence)
-            else:
-                # Unknown person
-                self.stats["unknowns_detected"] += 1
-                cluster_id = self.matching_engine.find_or_create_unknown_cluster(
-                    embedding,
-                    snapshot_path=None,  # TODO: save to disk
-                )
-                self._send_detection(None, det, 0, unknown_cluster_id=cluster_id)
+            self.stats["unknowns_detected"] += 1
+            self._send_detection(
+                None,
+                det,
+                confidence=det.confidence,
+                seen_at=now,
+            )
 
     def _send_detection(
         self,
         employee_id: Optional[str],
         detection: Detection,
-        confidence: float = 0,
+        confidence: Optional[float] = None,
         unknown_cluster_id: Optional[str] = None,
+        seen_at: Optional[datetime] = None,
+        disappeared_at: Optional[datetime] = None,
     ):
         """Detection eventini API'ga yuborish"""
         try:
+            event_confidence = detection.confidence if confidence is None else confidence
             payload = {
                 "camera_id": self.camera_id,
                 "employee_id": employee_id,
-                "track_id": unknown_cluster_id or employee_id or "unknown",
+                "track_id": unknown_cluster_id or employee_id or detection.track_id or "unknown",
                 "detection_type": detection.detection_type,
-                "confidence": min(1.0, max(0, confidence)),
+                "confidence": min(1.0, max(0, event_confidence)),
                 "bbox": detection.bbox,
-                "seen_at": datetime.now().isoformat(),
+                "seen_at": (seen_at or datetime.now()).isoformat(),
                 "snapshot_path": None,  # TODO: implement
             }
+            if disappeared_at:
+                payload["disappeared_at"] = disappeared_at.isoformat()
 
-            headers = {"Authorization": f"Bearer {API_TOKEN}"}
             response = requests.post(
                 f"{API_BASE}/internal/camera-detections",
                 json=payload,
-                headers=headers,
                 timeout=API_TIMEOUT,
             )
             response.raise_for_status()
@@ -500,10 +708,8 @@ class HumanRecognitionWorker:
     def _load_cameras(self):
         """API'dan kamera ro'yxatini yuklash va stream'larni boshlash"""
         try:
-            headers = {"Authorization": f"Bearer {API_TOKEN}"}
             response = requests.get(
                 f"{API_BASE}/internal/cameras/active",
-                headers=headers,
                 timeout=API_TIMEOUT,
             )
             response.raise_for_status()
@@ -544,14 +750,17 @@ class HumanRecognitionWorker:
             try:
                 time.sleep(30)  # Har 30 sekundda report
 
+                # Embeddinglarni davriy yangilash (yangi enroll qilingan xodimlar uchun)
+                self.matching_engine._refresh_embeddings()
+
                 total_frames = sum(h.stats["frames_processed"] for h in self.cameras.values())
-                total_faces = sum(h.stats["faces_detected"] for h in self.cameras.values())
+                total_people = sum(h.stats["persons_detected"] for h in self.cameras.values())
                 total_matched = sum(h.stats["employees_matched"] for h in self.cameras.values())
                 total_unknowns = sum(h.stats["unknowns_detected"] for h in self.cameras.values())
 
                 logger.info(
                     f"📊 Stats - Frames: {total_frames}, "
-                    f"Faces: {total_faces}, "
+                    f"People: {total_people}, "
                     f"Matched: {total_matched}, "
                     f"Unknowns: {total_unknowns}"
                 )

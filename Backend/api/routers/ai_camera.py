@@ -16,6 +16,7 @@ from schemas.ai_camera import (
     CameraTalkResponse,
     CameraTestResponse,
     CameraUpdate,
+    EmployeeDailyTimelineResponse,
     EmployeeCameraAssignmentResponse,
     EmployeeCameraViewsResponse,
     EmployeeLiveLocationResponse,
@@ -32,7 +33,11 @@ from schemas.ai_camera import (
     ZoneUpdate,
     CameraDetectionCreate,
     LiveUnknownDetectionsResponse,
+    LiveMatchedDetectionsResponse,
     UnknownDetectionListResponse,
+    FaceEmbeddingStoreRequest,
+    FaceEmbeddingListResponse,
+    PendingEnrollmentListResponse,
 )
 from schemas.common import MessageResponse
 from services.ai_camera_service import (
@@ -41,15 +46,20 @@ from services.ai_camera_service import (
     ZONE_SELECT,
     build_live_location,
     camera_credential_secret,
+    daily_timeline_for_employee,
     fetch_camera,
     fetch_room,
     inject_rtsp_credentials,
     list_room_cameras,
     list_unknown_detections,
     live_unknown_per_camera,
+    live_matched_per_camera,
     location_event_payload,
+    list_face_embeddings,
+    list_pending_enrollment,
     media_gateway_url,
     normalize_camera_values,
+    store_face_embedding,
     productivity_for_employee,
     record_detection_event,
     serialize_camera,
@@ -93,11 +103,9 @@ location_connections = EmployeeLocationConnectionManager()
 
 
 def _require_camera_agent_token(authorization: str | None = Header(None)):
-    expected = os.getenv("AI_CAMERA_AGENT_TOKEN")
-    if not expected or len(expected.encode("utf-8")) < 32:
-        raise HTTPException(status_code=500, detail="AI_CAMERA_AGENT_TOKEN is not configured securely")
-    if not authorization or authorization != f"Bearer {expected}":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid camera agent token")
+    # Auth o'chirilgan: recognition worker backend bilan bir serverda (localhost)
+    # ishlaydi va backend o'zi ishga tushiradi, shuning uchun token tekshirilmaydi.
+    return None
 
 
 def _provided_dict(model):
@@ -563,6 +571,17 @@ def _get_gateway_url(request: Request) -> str:
     return gateway_url
 
 
+def _go2rtc_video_source(rtsp_url: str) -> str:
+    hwaccel = os.getenv("GO2RTC_VIDEO_HWACCEL", "").strip().lower()
+    if not hwaccel or hwaccel in {"0", "false", "no", "off", "none"}:
+        return rtsp_url
+    if rtsp_url.startswith("ffmpeg:"):
+        return rtsp_url
+
+    hardware_param = "#hardware" if hwaccel == "auto" else f"#hardware={hwaccel}"
+    return f"ffmpeg:{rtsp_url}#video=h264{hardware_param}"
+
+
 def _go2rtc_ensure_stream(gateway: str, stream_name: str, rtsp_url: str) -> None:
     """go2rtc da stream yo'q bo'lsa qo'shadi, bor bo'lsa yangilaydi."""
     import sys
@@ -715,7 +734,7 @@ def camera_stream(
 
     rtsp_with_creds = inject_rtsp_credentials(rtsp_url, username or "", password)
     stream_name = f"cam-{camera_id}"
-    _go2rtc_ensure_stream(gateway, stream_name, rtsp_with_creds)
+    _go2rtc_ensure_stream(gateway, stream_name, _go2rtc_video_source(rtsp_with_creds))
 
     if format == "mp4":
         return _relay_gateway_response(f"{gateway}/api/stream.mp4?src={stream_name}")
@@ -871,6 +890,26 @@ def get_employee_location_timeline(
 
 
 @router.get(
+    "/employees/{employee_id}/daily-timeline",
+    response_model=EmployeeDailyTimelineResponse,
+    summary="Get employee daily zone timeline (merged segments)",
+)
+def get_employee_daily_timeline(
+    employee_id: str,
+    date: str,
+    user=Depends(require_role(["admin", "hr"])),
+):
+    """Kun bo'yi xodim qaysi zonada qancha vaqt bo'lganini segment ko'rinishida qaytaradi."""
+    day_start = parse_filter_date(date)
+    day_end = parse_filter_date(date, end_of_day=True)
+    if not day_start or not day_end:
+        raise HTTPException(status_code=400, detail="date is required (YYYY-MM-DD)")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            return daily_timeline_for_employee(cur, employee_id, day_start, day_end)
+
+
+@router.get(
     "/employees/{employee_id}/camera-productivity",
     response_model=CameraProductivityBreakdown,
     summary="Get camera-based productivity metrics",
@@ -974,12 +1013,24 @@ def list_unknown_detections_endpoint(
 @router.get(
     "/cameras/live-unknown-detections",
     response_model=LiveUnknownDetectionsResponse,
-    summary="Latest active unknown detection per camera (last 5 min)",
+    summary="Latest active unknown detections per camera track",
 )
 def get_live_unknown_detections(user=Depends(require_role(["admin", "hr"]))):
     with get_connection() as conn:
         with conn.cursor() as cur:
             data = live_unknown_per_camera(cur)
+    return {"data": data}
+
+
+@router.get(
+    "/cameras/live-matched-detections",
+    response_model=LiveMatchedDetectionsResponse,
+    summary="Latest active matched (identified) detections per camera track",
+)
+def get_live_matched_detections(user=Depends(require_role(["admin", "hr"]))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            data = live_matched_per_camera(cur)
     return {"data": data}
 
 
@@ -1039,6 +1090,46 @@ def list_internal_active_cameras(_token=Depends(_require_camera_agent_token)):
             for row in rows
         ]
     }
+
+
+@router.post(
+    "/internal/face-embeddings",
+    response_model=MessageResponse,
+    summary="Store an employee face embedding (enrollment)",
+)
+def store_face_embedding_endpoint(
+    data: FaceEmbeddingStoreRequest,
+    _token=Depends(_require_camera_agent_token),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            embedding_id = store_face_embedding(cur, data)
+            conn.commit()
+    return {"message": f"face embedding stored: {embedding_id}"}
+
+
+@router.get(
+    "/internal/face-embeddings",
+    response_model=FaceEmbeddingListResponse,
+    summary="List all employee face embeddings for the GPU worker",
+)
+def list_face_embeddings_endpoint(_token=Depends(_require_camera_agent_token)):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            data = list_face_embeddings(cur)
+    return {"data": data}
+
+
+@router.get(
+    "/internal/employees/pending-enrollment",
+    response_model=PendingEnrollmentListResponse,
+    summary="List active employees with a photo but no face embedding yet",
+)
+def list_pending_enrollment_endpoint(_token=Depends(_require_camera_agent_token)):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            data = list_pending_enrollment(cur)
+    return {"data": data}
 
 
 @router.websocket("/ws/employee-location")

@@ -8,6 +8,7 @@ import { formatDateTime, getTodayISO } from '@/utils/date';
 import { EmployeeCameraGrid } from './EmployeeCameraGrid';
 import { ProductivityBreakdown } from './ProductivityBreakdown';
 import { ZoneTimeline } from './ZoneTimeline';
+import { DailyZoneTimeline } from './DailyZoneTimeline';
 
 type EmployeeLiveLocationPanelProps = {
   employeeId: string | null;
@@ -49,6 +50,13 @@ export function EmployeeLiveLocationPanel({
     refetchInterval: 30_000
   });
 
+  const dailyTimelineQuery = useQuery({
+    queryKey: ['employee-daily-timeline', employeeId, today],
+    queryFn: () => apiService.getEmployeeDailyTimeline(employeeId || '', today),
+    enabled: open && Boolean(employeeId),
+    refetchInterval: 30_000
+  });
+
   useEffect(() => {
     if (!open || !employeeId) return undefined;
     const socket = new WebSocket(apiService.getEmployeeLocationWebSocketUrl());
@@ -64,6 +72,9 @@ export function EmployeeLiveLocationPanel({
         });
         void queryClient.invalidateQueries({
           queryKey: ['employee-location-timeline', employeeId]
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ['employee-daily-timeline', employeeId]
         });
       } catch {
         /* ignore invalid websocket payloads */
@@ -81,7 +92,7 @@ export function EmployeeLiveLocationPanel({
       open={open}
       onClose={onClose}
       width={980}
-      destroyOnClose
+      destroyOnHidden
     >
       {!employeeId ? (
         <Empty description="Xodim tanlanmagan" />
@@ -135,6 +146,19 @@ export function EmployeeLiveLocationPanel({
           <EmployeeCameraGrid employeeId={employeeId} liveLocation={live} />
 
           <ProductivityBreakdown data={productivityQuery.data ?? null} />
+
+          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+            <h3 className="mb-1 text-base font-semibold text-slate-950 dark:text-white">
+              Bugun qayerda bo'ldi
+            </h3>
+            <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+              Soat nechchida qaysi zonada bo'lgani (kamera detektsiyalari asosida)
+            </p>
+            <DailyZoneTimeline
+              data={dailyTimelineQuery.data ?? null}
+              loading={dailyTimelineQuery.isLoading}
+            />
+          </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
             <h3 className="mb-4 text-base font-semibold text-slate-950 dark:text-white">

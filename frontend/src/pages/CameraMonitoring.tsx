@@ -8,6 +8,7 @@ import {
   Segmented,
   Select,
   Spin,
+  Switch,
   Tag,
   Tooltip,
   message
@@ -19,6 +20,7 @@ import {
   RefreshCw,
   Server,
   SlidersHorizontal,
+  UserCheck,
   UserX,
   Volume2,
   Wifi,
@@ -28,6 +30,7 @@ import { useQuery } from '@tanstack/react-query';
 import apiService, {
   BACKEND_ORIGIN,
   type Camera as CameraType,
+  type LiveMatchedDetection,
   type LiveUnknownDetection,
   type Zone
 } from '@/services/api';
@@ -80,6 +83,7 @@ export default function CameraMonitoring() {
   const [roomId, setRoomId] = useState<string | undefined>();
   const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>();
   const [activeAudioCameraId, setActiveAudioCameraId] = useState<string | undefined>();
+  const [showMatched, setShowMatched] = useState(false);
 
   const camerasQuery = useQuery({
     queryKey: ['camera-monitoring-list', zoneId, roomId],
@@ -92,6 +96,13 @@ export default function CameraMonitoring() {
     queryKey: ['live-unknown-detections'],
     queryFn: () => apiService.getLiveUnknownDetections(),
     refetchInterval: 5_000
+  });
+
+  const liveMatchedQuery = useQuery({
+    queryKey: ['live-matched-detections'],
+    queryFn: () => apiService.getLiveMatchedDetections(),
+    refetchInterval: 5_000,
+    enabled: showMatched
   });
 
   const mediaGatewayQuery = useQuery({
@@ -116,12 +127,24 @@ export default function CameraMonitoring() {
   }, [cameras]);
 
   const unknownByCamera = useMemo(() => {
-    const map = new Map<string, LiveUnknownDetection>();
+    const map = new Map<string, LiveUnknownDetection[]>();
     for (const item of liveUnknownQuery.data ?? []) {
-      map.set(item.camera_id, item);
+      const cameraItems = map.get(item.camera_id) ?? [];
+      cameraItems.push(item);
+      map.set(item.camera_id, cameraItems);
     }
     return map;
   }, [liveUnknownQuery.data]);
+
+  const matchedByCamera = useMemo(() => {
+    const map = new Map<string, LiveMatchedDetection[]>();
+    for (const item of liveMatchedQuery.data ?? []) {
+      const cameraItems = map.get(item.camera_id) ?? [];
+      cameraItems.push(item);
+      map.set(item.camera_id, cameraItems);
+    }
+    return map;
+  }, [liveMatchedQuery.data]);
 
   const cameraStats = useMemo(() => {
     return cameras.reduce(
@@ -159,6 +182,7 @@ export default function CameraMonitoring() {
   const refreshAll = () => {
     void camerasQuery.refetch();
     void liveUnknownQuery.refetch();
+    void liveMatchedQuery.refetch();
     void mediaGatewayQuery.refetch();
   };
 
@@ -251,6 +275,14 @@ export default function CameraMonitoring() {
             value={liveUnknowns.length}
             tone={liveUnknowns.length ? 'text-red-600' : 'text-slate-700'}
           />
+          {showMatched ? (
+            <MetricTile
+              icon={UserCheck}
+              label="Live matched"
+              value={liveMatchedQuery.data?.length ?? 0}
+              tone="text-emerald-600"
+            />
+          ) : null}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -302,6 +334,16 @@ export default function CameraMonitoring() {
           ) : (
             <Tag className="m-0 flex h-8 items-center">AUDIO: OFF</Tag>
           )}
+          <div className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-medium text-slate-600 dark:border-slate-800 dark:text-slate-300">
+            <UserCheck size={14} className="text-emerald-600" />
+            <span>Show Matched</span>
+            <Switch
+              size="small"
+              checked={showMatched}
+              onChange={setShowMatched}
+              className={showMatched ? 'bg-emerald-600' : ''}
+            />
+          </div>
         </div>
       </header>
 
@@ -340,7 +382,11 @@ export default function CameraMonitoring() {
                     key={cameraItem.id}
                     camera={cameraItem}
                     profile={streamProfile}
-                    unknownDetection={unknownByCamera.get(cameraItem.id) ?? null}
+                    unknownDetection={unknownByCamera.get(cameraItem.id)?.[0] ?? null}
+                    unknownDetections={unknownByCamera.get(cameraItem.id) ?? []}
+                    unknownCount={unknownByCamera.get(cameraItem.id)?.length ?? 0}
+                    matchedDetections={matchedByCamera.get(cameraItem.id) ?? []}
+                    showMatched={showMatched}
                     audioActive={activeAudioCameraId === cameraItem.id}
                     onAudioToggle={() => toggleAudio(cameraItem)}
                     onOpen={() => setSelectedCameraId(cameraItem.id)}
@@ -429,7 +475,7 @@ export default function CameraMonitoring() {
             </div>
           ) : null
         }
-        destroyOnClose
+        destroyOnHidden
       >
         {selectedCamera ? (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
@@ -437,7 +483,11 @@ export default function CameraMonitoring() {
               camera={selectedCamera}
               profile={streamProfile}
               expanded
-              unknownDetection={unknownByCamera.get(selectedCamera.id) ?? null}
+              unknownDetection={unknownByCamera.get(selectedCamera.id)?.[0] ?? null}
+              unknownDetections={unknownByCamera.get(selectedCamera.id) ?? []}
+              unknownCount={unknownByCamera.get(selectedCamera.id)?.length ?? 0}
+              matchedDetections={matchedByCamera.get(selectedCamera.id) ?? []}
+              showMatched={showMatched}
               audioActive={activeAudioCameraId === selectedCamera.id}
               onAudioToggle={() => toggleAudio(selectedCamera)}
             />

@@ -223,6 +223,33 @@ class EmployeeCameraAssignmentResponse(BaseModel):
     room: RoomResponse
 
 
+class FaceEmbeddingStoreRequest(BaseModel):
+    employee_id: str
+    embedding: list[float] = Field(..., min_length=1)
+    snapshot_path: Optional[str] = None
+    confidence: float = Field(1.0, ge=0, le=1)
+    replace: bool = False
+
+
+class FaceEmbeddingItem(BaseModel):
+    employee_id: str
+    embedding: list[float]
+
+
+class FaceEmbeddingListResponse(BaseModel):
+    data: list[FaceEmbeddingItem]
+
+
+class PendingEnrollmentItem(BaseModel):
+    employee_id: str
+    full_name: str
+    photo_url: str
+
+
+class PendingEnrollmentListResponse(BaseModel):
+    data: list[PendingEnrollmentItem]
+
+
 class CameraDetectionCreate(BaseModel):
     camera_id: str
     employee_id: Optional[str] = None
@@ -288,6 +315,39 @@ class LocationTimelineResponse(BaseModel):
     data: list[LocationTimelineItem]
 
 
+class DailyTimelineSegment(BaseModel):
+    zone_id: str
+    zone_name: str
+    zone_type: ZoneType
+    camera_id: Optional[str]
+    camera_name: Optional[str]
+    room_id: Optional[str]
+    room_name: Optional[str]
+    start_at: str
+    end_at: str
+    start_clock: str
+    end_clock: str
+    duration_seconds: int
+    detections: int
+
+
+class DailyZoneTotal(BaseModel):
+    zone_id: str
+    zone_name: str
+    zone_type: ZoneType
+    total_seconds: int
+
+
+class EmployeeDailyTimelineResponse(BaseModel):
+    employee_id: str
+    date: str
+    first_seen_at: Optional[str]
+    last_seen_at: Optional[str]
+    total_tracked_seconds: int
+    segments: list[DailyTimelineSegment]
+    zone_totals: list[DailyZoneTotal]
+
+
 class CameraProductivityBreakdown(BaseModel):
     assigned_room_visible_seconds: int
     work_zone_visible_seconds: int
@@ -345,7 +405,25 @@ class LiveUnknownDetection(BaseModel):
     confidence: float
     seen_at: str
     snapshot_path: Optional[str]
+    bbox: Optional[Any] = None
 
 
 class LiveUnknownDetectionsResponse(BaseModel):
     data: list[LiveUnknownDetection]
+
+
+class LiveMatchedDetection(BaseModel):
+    id: str
+    camera_id: str
+    track_id: str
+    employee_id: str
+    employee_name: str
+    detection_type: DetectionType
+    confidence: float
+    seen_at: str
+    snapshot_path: Optional[str]
+    bbox: Optional[Any] = None
+
+
+class LiveMatchedDetectionsResponse(BaseModel):
+    data: list[LiveMatchedDetection]

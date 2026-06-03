@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Camera as CameraIcon,
   Expand,
   RefreshCw,
+  UserCheck,
   UserX,
   Volume2,
   VolumeX
@@ -12,6 +13,8 @@ import {
   BACKEND_ORIGIN,
   type Camera,
   type CameraMini,
+  type DetectionBbox,
+  type LiveMatchedDetection,
   type LiveUnknownDetection
 } from '@/services/api';
 import { CameraStatusBadge } from './CameraStatusBadge';
@@ -37,9 +40,72 @@ function getRoomName(camera: CameraLike) {
   return 'room_name' in camera ? camera.room_name : null;
 }
 
+type BboxDrawItem = {
+  bbox: DetectionBbox;
+  color: string;
+  label: string;
+  confidence: number;
+};
+
+function drawBoxes(canvas: HTMLCanvasElement, items: BboxDrawItem[]) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const cw = canvas.width;
+  const ch = canvas.height;
+
+  ctx.clearRect(0, 0, cw, ch);
+
+  for (const item of items) {
+    const { bbox, color, label, confidence } = item;
+
+    if (confidence < 0.5) continue;
+
+    const fw = bbox.fw ?? 1920;
+    const fh = bbox.fh ?? 1080;
+
+    // object-cover: uniform scale, center offset
+    const scale = Math.max(cw / fw, ch / fh);
+    const offsetX = (cw - fw * scale) / 2;
+    const offsetY = (ch - fh * scale) / 2;
+
+    const rx = bbox.x * scale + offsetX;
+    const ry = bbox.y * scale + offsetY;
+    const rw = bbox.w * scale;
+    const rh = bbox.h * scale;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.shadowBlur = 0;
+
+    const text = `${label}  ${Math.round(confidence * 100)}%`;
+    const fontSize = Math.max(11, Math.min(14, rw / 7));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    const textW = ctx.measureText(text).width;
+    const padX = 5;
+    const padY = 3;
+    const labelH = fontSize + padY * 2;
+
+    const labelY = ry > labelH + 2 ? ry - labelH - 1 : ry + 1;
+
+    ctx.fillStyle = color;
+    ctx.fillRect(rx, labelY, textW + padX * 2, labelH);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, rx + padX, labelY + fontSize + padY - 2);
+  }
+}
+
 type Props = {
   camera: CameraLike;
+  unknownDetections?: LiveUnknownDetection[];
   unknownDetection?: LiveUnknownDetection | null;
+  unknownCount?: number;
+  matchedDetections?: LiveMatchedDetection[];
+  showMatched?: boolean;
   profile?: StreamProfile;
   expanded?: boolean;
   audioActive?: boolean;
@@ -49,7 +115,11 @@ type Props = {
 
 export function CameraGridItem({
   camera,
+  unknownDetections = [],
   unknownDetection,
+  unknownCount = 0,
+  matchedDetections = [],
+  showMatched = false,
   profile = 'main',
   expanded = false,
   audioActive = false,
@@ -60,6 +130,8 @@ export function CameraGridItem({
   const [hovered, setHovered] = useState(false);
   const [shouldStream, setShouldStream] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -84,11 +156,57 @@ export function CameraGridItem({
     return tokenizedUrl(camera.stream_url, profile);
   }, [camera.stream_url, profile]);
 
+  const activeUnknowns = unknownDetection ? [unknownDetection, ...unknownDetections.filter(u => u.id !== unknownDetection.id)] : unknownDetections;
+
+  const redraw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const wrap = videoWrapRef.current;
+    if (!canvas || !wrap) return;
+
+    const rect = wrap.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+
+    const items: BboxDrawItem[] = [];
+
+    for (const u of activeUnknowns) {
+      if (u.bbox) {
+        items.push({ bbox: u.bbox, color: '#ef4444', label: "Noma'lum", confidence: u.confidence });
+      }
+    }
+
+    if (showMatched) {
+      for (const m of matchedDetections) {
+        if (m.bbox) {
+          items.push({ bbox: m.bbox, color: '#22c55e', label: m.employee_name, confidence: m.confidence });
+        }
+      }
+    }
+
+    drawBoxes(canvas, items);
+  }, [activeUnknowns, matchedDetections, showMatched]);
+
+  useEffect(() => {
+    redraw();
+  }, [redraw]);
+
+  useEffect(() => {
+    const wrap = videoWrapRef.current;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => redraw());
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [redraw]);
+
   const handleFullscreen = async () => {
     await containerRef.current?.requestFullscreen?.();
   };
 
   const roomName = getRoomName(camera);
+  const unknownLabel =
+    unknownCount > 1 ? `${unknownCount} noma'lum odam` : "Noma'lum odam";
+
+  const hasBboxData = activeUnknowns.some(u => u.bbox) || (showMatched && matchedDetections.some(m => m.bbox));
 
   return (
     <div
@@ -102,7 +220,7 @@ export function CameraGridItem({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="relative aspect-video w-full bg-slate-950">
+      <div ref={videoWrapRef} className="relative aspect-video w-full bg-slate-950">
         {streamSrc && shouldStream && !videoError ? (
           <video
             key={`grid-${camera.id}-${streamSrc}`}
@@ -140,6 +258,13 @@ export function CameraGridItem({
           </div>
         )}
 
+        {hasBboxData ? (
+          <canvas
+            ref={canvasRef}
+            className="pointer-events-none absolute inset-0 h-full w-full"
+          />
+        ) : null}
+
         <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent p-2">
           <div className="min-w-0">
             <p className="truncate text-xs font-semibold text-white drop-shadow">
@@ -153,18 +278,31 @@ export function CameraGridItem({
           <CameraStatusBadge status={camera.status} />
         </div>
 
-        {unknownDetection ? (
-          <Tooltip
-            title={`Noma'lum odam - ${Math.round(
-              unknownDetection.confidence * 100
-            )}% ishonch - ${formatDateTime(unknownDetection.seen_at)}`}
-          >
-            <div className="absolute left-2 top-9 flex animate-pulse items-center gap-1 rounded-md bg-red-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-lg">
-              <UserX size={11} />
-              Noma'lum odam
-            </div>
-          </Tooltip>
-        ) : null}
+        <div className="absolute left-2 top-9 flex flex-col gap-1">
+          {unknownDetection ? (
+            <Tooltip
+              title={`${unknownLabel} - ${Math.round(
+                unknownDetection.confidence * 100
+              )}% ishonch - ${formatDateTime(unknownDetection.seen_at)}`}
+            >
+              <div className="flex animate-pulse items-center gap-1 rounded-md bg-red-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-lg">
+                <UserX size={11} />
+                {unknownLabel}
+              </div>
+            </Tooltip>
+          ) : null}
+          {showMatched && matchedDetections.map((m) => (
+            <Tooltip
+              key={m.id}
+              title={`${m.employee_name} - ${Math.round(m.confidence * 100)}% ishonch - ${formatDateTime(m.seen_at)}`}
+            >
+              <div className="flex items-center gap-1 rounded-md bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-lg">
+                <UserCheck size={11} />
+                {m.employee_name}
+              </div>
+            </Tooltip>
+          ))}
+        </div>
 
         <div
           className={`absolute inset-x-0 bottom-0 flex items-center justify-end gap-1.5 bg-gradient-to-t from-black/70 to-transparent p-2 transition-opacity duration-150 ${

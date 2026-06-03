@@ -331,7 +331,7 @@ export function EmployeeTimelineDrawer({
       title={title}
       width={920}
       onClose={onClose}
-      destroyOnClose
+      destroyOnHidden
     >
       {loading ? (
         <Skeleton active paragraph={{ rows: 12 }} />

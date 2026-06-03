@@ -19,7 +19,8 @@
       "Bash(findstr \"APIRouter\" *.py)",
       "Bash(findstr \"include_router\" router.py)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python _check_env.py)"
     ]
   },
   "primaryModel": "gemini/gemini-1.5-flash-latest"

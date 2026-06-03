@@ -26,7 +26,7 @@ export function TalkbackWidget({ cameraId, channelId = '1', token }: TalkbackWid
 
       if (!isListening) {
         // Start listening
-        const audioSrc = `${BACKEND_ORIGIN}/api/cameras/${cameraId}/audio${token ? `?token=${token}` : ''}`;
+        const audioSrc = `${BACKEND_ORIGIN}/cameras/${cameraId}/audio${token ? `?token=${token}` : ''}`;
         if (audioRef.current) {
           audioRef.current.src = audioSrc;
           audioRef.current.play().catch(err => {
@@ -94,7 +94,7 @@ export function TalkbackWidget({ cameraId, channelId = '1', token }: TalkbackWid
   const sendAudioToCamera = async (audioBlob: Blob) => {
     try {
       setError(null);
-      const url = `${BACKEND_ORIGIN}/api/cameras/${cameraId}/talkback/send-audio?channel_id=${channelId}${
+      const url = `${BACKEND_ORIGIN}/cameras/${cameraId}/talkback/send-audio?channel_id=${channelId}${
         token ? `&token=${token}` : ''
       }`;
 

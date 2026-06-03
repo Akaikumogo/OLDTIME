@@ -1,13 +1,9 @@
 import axios, { type AxiosInstance } from 'axios';
 import { notification } from 'antd';
 
-export const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
-    /\/+$/,
-    ''
-  ) || 'http://192.168.0.165:8000';
-
-export const BACKEND_ORIGIN = new URL(API_BASE_URL).origin;
+export const API_BASE_URL = '';
+export const BACKEND_ORIGIN =
+  typeof window === 'undefined' ? '' : window.location.origin;
 
 const TOKEN_KEYS = {
   access: 'accessToken',
@@ -428,7 +424,6 @@ class ApiService {
 
   constructor() {
     this.api = axios.create({
-      baseURL: API_BASE_URL,
       headers: { 'Content-Type': 'application/json' }
     });
 
@@ -519,11 +514,9 @@ class ApiService {
     const { data } = await axios.post<{
       access_token: string;
       token_type: string;
-    }>(
-      `${API_BASE_URL}/admin/refresh`,
-      { refresh_token: refreshToken },
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    }>('/admin/refresh', { refresh_token: refreshToken }, {
+      headers: { 'Content-Type': 'application/json' }
+    });
 
     localStorage.setItem(TOKEN_KEYS.access, data.access_token);
     return data.access_token;
@@ -1296,7 +1289,7 @@ class ApiService {
   // ---------- AI Camera Tracking ----------
   getEmployeeLocationWebSocketUrl() {
     const token = readStoredValue(TOKEN_KEYS.access) || '';
-    const wsOrigin = BACKEND_ORIGIN.replace(/^http/i, 'ws');
+    const wsOrigin = window.location.origin.replace(/^http/i, 'ws');
     return `${wsOrigin}/ws/employee-location?token=${encodeURIComponent(token)}`;
   }
 
@@ -1440,6 +1433,13 @@ class ApiService {
     return data.data;
   }
 
+  async getLiveMatchedDetections() {
+    const { data } = await this.api.get<{ data: LiveMatchedDetection[] }>(
+      '/cameras/live-matched-detections'
+    );
+    return data.data;
+  }
+
   async getCameraMediaGatewayStatus() {
     const { data } = await this.api.get<CameraMediaGatewayStatus>(
       '/cameras/media-gateway/status'
@@ -1467,6 +1467,14 @@ class ApiService {
       { params: { limit } }
     );
     return data.data;
+  }
+
+  async getEmployeeDailyTimeline(employeeId: string, date: string) {
+    const { data } = await this.api.get<EmployeeDailyTimeline>(
+      `/employees/${employeeId}/daily-timeline`,
+      { params: { date } }
+    );
+    return data;
   }
 
   async getEmployeeCameraProductivity(params: {
@@ -1862,6 +1870,39 @@ export type LocationTimelineItem = {
   snapshot_path?: string | null;
 };
 
+export type DailyTimelineSegment = {
+  zone_id: string;
+  zone_name: string;
+  zone_type: ZoneType;
+  camera_id?: string | null;
+  camera_name?: string | null;
+  room_id?: string | null;
+  room_name?: string | null;
+  start_at: string;
+  end_at: string;
+  start_clock: string;
+  end_clock: string;
+  duration_seconds: number;
+  detections: number;
+};
+
+export type DailyZoneTotal = {
+  zone_id: string;
+  zone_name: string;
+  zone_type: ZoneType;
+  total_seconds: number;
+};
+
+export type EmployeeDailyTimeline = {
+  employee_id: string;
+  date: string;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  total_tracked_seconds: number;
+  segments: DailyTimelineSegment[];
+  zone_totals: DailyZoneTotal[];
+};
+
 export type CameraProductivityBreakdown = {
   assigned_room_visible_seconds: number;
   work_zone_visible_seconds: number;
@@ -1892,6 +1933,15 @@ export type UnknownDetectionItem = {
   bbox?: Record<string, unknown> | null;
 };
 
+export type DetectionBbox = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fw?: number;
+  fh?: number;
+};
+
 export type LiveUnknownDetection = {
   id: string;
   camera_id: string;
@@ -1900,6 +1950,20 @@ export type LiveUnknownDetection = {
   confidence: number;
   seen_at: string;
   snapshot_path?: string | null;
+  bbox?: DetectionBbox | null;
+};
+
+export type LiveMatchedDetection = {
+  id: string;
+  camera_id: string;
+  track_id: string;
+  employee_id: string;
+  employee_name: string;
+  detection_type: DetectionType;
+  confidence: number;
+  seen_at: string;
+  snapshot_path?: string | null;
+  bbox?: DetectionBbox | null;
 };
 
 const apiService = new ApiService();

@@ -778,6 +778,131 @@ def timeline_for_employee(cur, employee_id: str, limit: int):
     ]
 
 
+def daily_timeline_for_employee(cur, employee_id: str, day_start: datetime, day_end: datetime):
+    """
+    Kun bo'yi xom detection eventlarni toza zona-segmentlarga birlashtiradi.
+    Ya'ni "09:00 - 10:30 Ish xonasi, 10:30 - 10:45 Koridor" ko'rinishida.
+
+    Bir xil zonadagi va orasidagi tanaffus AI_CAMERA_TIMELINE_GAP_SECONDS dan
+    kichik bo'lgan ketma-ket eventlar bitta segmentga qo'shiladi.
+    """
+    ensure_employee(cur, employee_id)
+    gap_seconds = int(os.getenv("AI_CAMERA_TIMELINE_GAP_SECONDS", "120"))
+
+    cur.execute(
+        """
+        SELECT
+            cde.seen_at,
+            cde.disappeared_at,
+            cde.duration_seconds,
+            z.id,
+            z.name,
+            z.type,
+            c.id,
+            c.name,
+            r.id,
+            r.name
+        FROM camera_detection_events cde
+        JOIN cameras c ON c.id = cde.camera_id
+        JOIN zones z ON z.id = cde.zone_id
+        LEFT JOIN rooms r ON r.id = c.room_id
+        WHERE cde.employee_id = %s
+          AND cde.seen_at >= %s
+          AND cde.seen_at <= %s
+        ORDER BY cde.seen_at ASC
+        """,
+        (employee_id, day_start, day_end),
+    )
+    rows = cur.fetchall()
+
+    segments: list[dict] = []
+    current: dict | None = None
+
+    for row in rows:
+        seen_at, disappeared_at, duration, zone_id, zone_name, zone_type, cam_id, cam_name, room_id, room_name = row
+        if disappeared_at:
+            event_end = disappeared_at
+        elif duration:
+            event_end = seen_at + timedelta(seconds=int(duration))
+        else:
+            event_end = seen_at
+
+        same_zone = current is not None and str(current["zone_id"]) == str(zone_id)
+        within_gap = current is not None and (seen_at - current["end"]).total_seconds() <= gap_seconds
+
+        if current is not None and same_zone and within_gap:
+            if event_end > current["end"]:
+                current["end"] = event_end
+            current["detections"] += 1
+            current["camera_id"] = str(cam_id)
+            current["camera_name"] = cam_name
+        else:
+            if current is not None:
+                segments.append(current)
+            current = {
+                "zone_id": str(zone_id),
+                "zone_name": zone_name,
+                "zone_type": zone_type,
+                "camera_id": str(cam_id),
+                "camera_name": cam_name,
+                "room_id": str(room_id) if room_id else None,
+                "room_name": room_name,
+                "start": seen_at,
+                "end": event_end,
+                "detections": 1,
+            }
+
+    if current is not None:
+        segments.append(current)
+
+    serialized_segments = []
+    zone_totals: dict[str, dict] = {}
+    total_tracked = 0
+
+    for seg in segments:
+        duration_seconds = max(0, int((seg["end"] - seg["start"]).total_seconds()))
+        total_tracked += duration_seconds
+        serialized_segments.append(
+            {
+                "zone_id": seg["zone_id"],
+                "zone_name": seg["zone_name"],
+                "zone_type": seg["zone_type"],
+                "camera_id": seg["camera_id"],
+                "camera_name": seg["camera_name"],
+                "room_id": seg["room_id"],
+                "room_name": seg["room_name"],
+                "start_at": str(seg["start"]),
+                "end_at": str(seg["end"]),
+                "start_clock": seg["start"].strftime("%H:%M:%S"),
+                "end_clock": seg["end"].strftime("%H:%M:%S"),
+                "duration_seconds": duration_seconds,
+                "detections": seg["detections"],
+            }
+        )
+        bucket = zone_totals.setdefault(
+            seg["zone_id"],
+            {
+                "zone_id": seg["zone_id"],
+                "zone_name": seg["zone_name"],
+                "zone_type": seg["zone_type"],
+                "total_seconds": 0,
+            },
+        )
+        bucket["total_seconds"] += duration_seconds
+
+    return {
+        "employee_id": employee_id,
+        "date": day_start.strftime("%Y-%m-%d"),
+        "first_seen_at": str(segments[0]["start"]) if segments else None,
+        "last_seen_at": str(segments[-1]["end"]) if segments else None,
+        "total_tracked_seconds": total_tracked,
+        "segments": serialized_segments,
+        "zone_totals": sorted(
+            zone_totals.values(), key=lambda item: item["total_seconds"], reverse=True
+        ),
+    }
+
+
 def productivity_for_employee(cur, employee_id: str, date_from: datetime, date_to: datetime):
     ensure_employee(cur, employee_id)
     assignment = assignment_for_employee(cur, employee_id)
@@ -932,18 +1057,40 @@ def list_unknown_detections(
 
 
 def live_unknown_per_camera(cur):
-    """Latest active unknown detection per camera (seen in last 5 minutes)."""
+    """Latest active unknown detections grouped by camera track."""
+    window_seconds = int(os.getenv("AI_CAMERA_LIVE_UNKNOWN_WINDOW_SECONDS", "60"))
     cur.execute(
         """
-        SELECT DISTINCT ON (cde.camera_id)
-            cde.id, cde.camera_id, cde.track_id, cde.detection_type,
-            cde.confidence, cde.seen_at, cde.snapshot_path
-        FROM camera_detection_events cde
-        WHERE cde.employee_id IS NULL
-          AND cde.disappeared_at IS NULL
-          AND cde.seen_at >= NOW() - INTERVAL '5 minutes'
-        ORDER BY cde.camera_id, cde.seen_at DESC
-        """
+        WITH latest_tracks AS (
+            SELECT DISTINCT ON (cde.camera_id, cde.track_id)
+                cde.id,
+                cde.camera_id,
+                cde.track_id,
+                cde.detection_type,
+                cde.confidence,
+                cde.seen_at,
+                cde.disappeared_at,
+                cde.snapshot_path,
+                cde.bbox
+            FROM camera_detection_events cde
+            WHERE cde.employee_id IS NULL
+              AND cde.seen_at >= NOW() - (%s * INTERVAL '1 second')
+            ORDER BY cde.camera_id, cde.track_id, cde.seen_at DESC, cde.created_at DESC
+        )
+        SELECT
+            id,
+            camera_id,
+            track_id,
+            detection_type,
+            confidence,
+            seen_at,
+            snapshot_path,
+            bbox
+        FROM latest_tracks
+        WHERE disappeared_at IS NULL
+        ORDER BY seen_at DESC, confidence DESC
+        """,
+        (window_seconds,),
     )
     return [
         {
@@ -954,6 +1101,65 @@ def live_unknown_per_camera(cur):
             "confidence": float(row[4]),
             "seen_at": str(row[5]),
             "snapshot_path": row[6],
+            "bbox": row[7],
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def live_matched_per_camera(cur):
+    """Latest active matched (identified) detections grouped by camera track."""
+    window_seconds = int(os.getenv("AI_CAMERA_LIVE_UNKNOWN_WINDOW_SECONDS", "60"))
+    cur.execute(
+        """
+        WITH latest_tracks AS (
+            SELECT DISTINCT ON (cde.camera_id, cde.track_id)
+                cde.id,
+                cde.camera_id,
+                cde.track_id,
+                cde.employee_id,
+                e.full_name,
+                cde.detection_type,
+                cde.confidence,
+                cde.seen_at,
+                cde.disappeared_at,
+                cde.snapshot_path,
+                cde.bbox
+            FROM camera_detection_events cde
+            JOIN employees e ON e.id = cde.employee_id
+            WHERE cde.employee_id IS NOT NULL
+              AND cde.seen_at >= NOW() - (%s * INTERVAL '1 second')
+            ORDER BY cde.camera_id, cde.track_id, cde.seen_at DESC, cde.created_at DESC
+        )
+        SELECT
+            id,
+            camera_id,
+            track_id,
+            employee_id,
+            full_name,
+            detection_type,
+            confidence,
+            seen_at,
+            snapshot_path,
+            bbox
+        FROM latest_tracks
+        WHERE disappeared_at IS NULL
+        ORDER BY seen_at DESC, confidence DESC
+        """,
+        (window_seconds,),
+    )
+    return [
+        {
+            "id": str(row[0]),
+            "camera_id": str(row[1]),
+            "track_id": row[2],
+            "employee_id": str(row[3]),
+            "employee_name": row[4],
+            "detection_type": row[5],
+            "confidence": float(row[6]),
+            "seen_at": str(row[7]),
+            "snapshot_path": row[8],
+            "bbox": row[9],
         }
         for row in cur.fetchall()
     ]
@@ -967,3 +1173,73 @@ def media_gateway_url(kind: str, camera_id: str, profile: str | None = None):
     if profile:
         suffix += f"?profile={profile}"
     return base + suffix
+
+
+# ============ Face embeddings (enrollment / matching) ============
+
+def store_face_embedding(cur, data):
+    """Xodim yuzining embedding'ini saqlaydi (enroll skript/worker yuboradi)."""
+    ensure_employee(cur, data.employee_id)
+    if not data.embedding:
+        raise HTTPException(status_code=400, detail="Embedding vector is empty")
+
+    if getattr(data, "replace", False):
+        cur.execute(
+            "DELETE FROM employee_face_embeddings WHERE employee_id = %s",
+            (data.employee_id,),
+        )
+
+    cur.execute(
+        """
+        INSERT INTO employee_face_embeddings (
+            employee_id, embedding_vector, snapshot_path, confidence, updated_at
+        )
+        VALUES (%s, %s, %s, %s, NOW())
+        RETURNING id
+        """,
+        (
+            data.employee_id,
+            list(data.embedding),
+            data.snapshot_path,
+            float(data.confidence if data.confidence is not None else 1.0),
+        ),
+    )
+    return str(cur.fetchone()[0])
+
+
+def list_face_embeddings(cur):
+    """Worker matching uchun barcha aktiv xodim embeddinglarini qaytaradi."""
+    cur.execute(
+        """
+        SELECT f.employee_id, f.embedding_vector
+        FROM employee_face_embeddings f
+        JOIN employees e ON e.id = f.employee_id
+        WHERE e.is_active = TRUE
+        ORDER BY f.employee_id
+        """
+    )
+    return [
+        {"employee_id": str(row[0]), "embedding": [float(x) for x in (row[1] or [])]}
+        for row in cur.fetchall()
+    ]
+
+
+def list_pending_enrollment(cur):
+    """Rasmi bor, lekin hali embedding'i yo'q aktiv xodimlar (enroll navbati)."""
+    cur.execute(
+        """
+        SELECT e.id, e.full_name, e.photo_url
+        FROM employees e
+        WHERE e.is_active = TRUE
+          AND e.photo_url IS NOT NULL
+          AND e.photo_url <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM employee_face_embeddings f WHERE f.employee_id = e.id
+          )
+        ORDER BY e.created_at ASC
+        """
+    )
+    return [
+        {"employee_id": str(row[0]), "full_name": row[1], "photo_url": row[2]}
+        for row in cur.fetchall()
+    ]

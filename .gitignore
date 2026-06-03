@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+
+*.log
+Backend/uvicorn.*.log
+
+go2rtc/ffmpeg/
+yolov8*.pt
+Backend/face_captures/

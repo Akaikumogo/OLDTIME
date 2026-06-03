@@ -24,6 +24,7 @@ MIGRATION_FILES = (
     "003_add_employee_code.sql",
     "004_add_employee_photo.sql",
     "005_add_computer_device_id.sql",
+    "006_face_embeddings_and_unknowns.sql",
 )
 
 
