@@ -1608,7 +1608,10 @@ def list_unknown_detections(
         conditions.append("cde.seen_at <= %s")
         params.append(date_to)
     if active_only:
+        window_seconds = int(os.getenv("AI_CAMERA_LIVE_UNKNOWN_WINDOW_SECONDS", "60"))
         conditions.append("cde.disappeared_at IS NULL")
+        conditions.append("cde.seen_at >= NOW() - (%s * INTERVAL '1 second')")
+        params.append(window_seconds)
 
     where = " AND ".join(conditions)
 
@@ -1660,7 +1663,55 @@ def list_unknown_detections(
         }
         for row in rows
     ]
+    if active_only:
+        data = dedupe_live_unknown_detections(data)
+        total = len(data)
     return total, data
+
+
+def _bbox_center(bbox):
+    if not bbox:
+        return None
+    try:
+        return (
+            float(bbox.get("x", 0)) + float(bbox.get("w", 0)) / 2,
+            float(bbox.get("y", 0)) + float(bbox.get("h", 0)) / 2,
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _same_live_person(candidate: dict, kept: dict, max_distance: float, max_age_seconds: float) -> bool:
+    if candidate.get("camera_id") != kept.get("camera_id"):
+        return False
+    first_center = _bbox_center(candidate.get("bbox"))
+    second_center = _bbox_center(kept.get("bbox"))
+    if not first_center or not second_center:
+        return False
+
+    try:
+        first_seen = parse_datetime_input(candidate["seen_at"])
+        second_seen = parse_datetime_input(kept["seen_at"])
+    except Exception:
+        return False
+    if abs((second_seen - first_seen).total_seconds()) > max_age_seconds:
+        return False
+
+    dx = first_center[0] - second_center[0]
+    dy = first_center[1] - second_center[1]
+    return (dx * dx + dy * dy) ** 0.5 <= max_distance
+
+
+def dedupe_live_unknown_detections(items: list[dict]) -> list[dict]:
+    """Collapse short-lived duplicate body tracks that represent one visible person."""
+    max_distance = float(os.getenv("AI_CAMERA_LIVE_UNKNOWN_DEDUPE_DISTANCE", "140"))
+    max_age_seconds = float(os.getenv("AI_CAMERA_LIVE_UNKNOWN_DEDUPE_SECONDS", "20"))
+    kept: list[dict] = []
+    for item in items:
+        if any(_same_live_person(item, existing, max_distance, max_age_seconds) for existing in kept):
+            continue
+        kept.append(item)
+    return kept
 
 
 def live_unknown_per_camera(cur):
@@ -1699,7 +1750,7 @@ def live_unknown_per_camera(cur):
         """,
         (window_seconds,),
     )
-    return [
+    data = [
         {
             "id": str(row[0]),
             "camera_id": str(row[1]),
@@ -1712,6 +1763,7 @@ def live_unknown_per_camera(cur):
         }
         for row in cur.fetchall()
     ]
+    return dedupe_live_unknown_detections(data)
 
 
 def live_matched_per_camera(cur):

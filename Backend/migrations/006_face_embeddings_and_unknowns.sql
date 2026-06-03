@@ -35,6 +35,29 @@ CREATE TABLE IF NOT EXISTS unknown_persons (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Older installs may already have unknown_persons with a narrower schema.
+-- Keep startup migrations idempotent by backfilling the columns this module needs.
+ALTER TABLE unknown_persons
+    ADD COLUMN IF NOT EXISTS cluster_id VARCHAR(120),
+    ADD COLUMN IF NOT EXISTS primary_embedding FLOAT8[],
+    ADD COLUMN IF NOT EXISTS sample_snapshot_path TEXT,
+    ADD COLUMN IF NOT EXISTS detection_count INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS linked_employee_id UUID NULL REFERENCES employees(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP NULL,
+    ADD COLUMN IF NOT EXISTS linked_by_user_id UUID NULL REFERENCES admins(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS notes TEXT,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+UPDATE unknown_persons
+SET cluster_id = COALESCE(cluster_id, id::text)
+WHERE cluster_id IS NULL;
+
+ALTER TABLE unknown_persons
+    ALTER COLUMN cluster_id SET NOT NULL;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_unknown_persons_cluster_id
     ON unknown_persons(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_unknown_persons_linked_employee_id

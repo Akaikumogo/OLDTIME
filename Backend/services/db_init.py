@@ -25,8 +25,11 @@ MIGRATION_FILES = (
     "004_add_employee_photo.sql",
     "005_add_computer_device_id.sql",
     "006_face_embeddings_and_unknowns.sql",
+    "007_backup_management.sql",
     "007_camera_line_crossing.sql",
     "008_camera_room_presence.sql",
+    "009_cameras_schema_refactor.sql",
+    "010_dedup_active_detection_tracks.sql",
 )
 
 

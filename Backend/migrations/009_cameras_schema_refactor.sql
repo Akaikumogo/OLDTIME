@@ -2,10 +2,32 @@
 -- Renames columns, adds new ones, drops stale ones.
 
 -- Rename ip_address -> ip
-ALTER TABLE cameras RENAME COLUMN ip_address TO ip;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cameras' AND column_name = 'ip_address'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cameras' AND column_name = 'ip'
+    ) THEN
+        ALTER TABLE cameras RENAME COLUMN ip_address TO ip;
+    END IF;
+END $$;
 
 -- Rename password -> password_encrypted (already bytea, compatible with pgcrypto)
-ALTER TABLE cameras RENAME COLUMN password TO password_encrypted;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cameras' AND column_name = 'password'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cameras' AND column_name = 'password_encrypted'
+    ) THEN
+        ALTER TABLE cameras RENAME COLUMN password TO password_encrypted;
+    END IF;
+END $$;
 
 -- Add new URL / config columns
 ALTER TABLE cameras
