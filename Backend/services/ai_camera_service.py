@@ -194,6 +194,60 @@ def serialize_camera_mini(row):
     }
 
 
+def default_crossing_rule(camera_id: str):
+    return {
+        "id": None,
+        "camera_id": camera_id,
+        "name": "Main crossing line",
+        "enabled": False,
+        "line_x1": 0.5,
+        "line_y1": 0.1,
+        "line_x2": 0.5,
+        "line_y2": 0.9,
+        "entry_direction": "negative_to_positive",
+        "created_at": None,
+        "updated_at": None,
+    }
+
+
+def serialize_crossing_rule(row, camera_id: str | None = None):
+    if not row:
+        if not camera_id:
+            return None
+        return default_crossing_rule(camera_id)
+    return {
+        "id": str(row[0]),
+        "camera_id": str(row[1]),
+        "name": row[2],
+        "enabled": bool(row[3]),
+        "line_x1": float(row[4]),
+        "line_y1": float(row[5]),
+        "line_x2": float(row[6]),
+        "line_y2": float(row[7]),
+        "entry_direction": row[8],
+        "created_at": str(row[9]) if row[9] else None,
+        "updated_at": str(row[10]) if row[10] else None,
+    }
+
+
+def crossing_rule_select():
+    return """
+        SELECT
+            id,
+            camera_id,
+            name,
+            enabled,
+            line_x1,
+            line_y1,
+            line_x2,
+            line_y2,
+            entry_direction,
+            created_at,
+            updated_at
+        FROM camera_crossing_rules
+    """
+
+
 def serialize_room(row, cameras=None):
     return {
         "id": str(row[0]),
@@ -237,6 +291,12 @@ def ensure_employee(cur, employee_id: str | None):
     cur.execute("SELECT 1 FROM employees WHERE id = %s AND is_active = TRUE", (employee_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Employee not found")
+
+
+def ensure_camera(cur, camera_id: str):
+    cur.execute("SELECT 1 FROM cameras WHERE id = %s", (camera_id,))
+    if not cur.fetchone():
+        raise HTTPException(status_code=404, detail="Camera not found")
 
 
 def fetch_camera(cur, camera_id: str):
@@ -724,6 +784,552 @@ def record_detection_event(cur, data):
         live_location = build_live_location(cur, data.employee_id)
 
     return str(event_id), live_location
+
+
+def get_camera_crossing_rule(cur, camera_id: str):
+    ensure_camera(cur, camera_id)
+    cur.execute(crossing_rule_select() + " WHERE camera_id = %s", (camera_id,))
+    return serialize_crossing_rule(cur.fetchone(), camera_id)
+
+
+def _validate_crossing_line(values: dict[str, Any], current: dict[str, Any] | None = None):
+    merged = dict(current or default_crossing_rule(values.get("camera_id", "")))
+    merged.update({key: value for key, value in values.items() if value is not None})
+    if (
+        float(merged["line_x1"]) == float(merged["line_x2"])
+        and float(merged["line_y1"]) == float(merged["line_y2"])
+    ):
+        raise HTTPException(status_code=400, detail="Crossing line endpoints cannot be the same")
+    return merged
+
+
+def upsert_camera_crossing_rule(cur, camera_id: str, data):
+    ensure_camera(cur, camera_id)
+    current = get_camera_crossing_rule(cur, camera_id)
+    values = provided_fields(data)
+    raw = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else data.dict(exclude_unset=True)
+    if not values:
+        return current
+
+    merged = _validate_crossing_line(raw, current)
+    direction_value = data.direction.value if hasattr(data.direction, "value") else data.direction
+    cur.execute(
+        """
+        INSERT INTO camera_crossing_rules (
+            camera_id,
+            name,
+            enabled,
+            line_x1,
+            line_y1,
+            line_x2,
+            line_y2,
+            entry_direction,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (camera_id)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            enabled = EXCLUDED.enabled,
+            line_x1 = EXCLUDED.line_x1,
+            line_y1 = EXCLUDED.line_y1,
+            line_x2 = EXCLUDED.line_x2,
+            line_y2 = EXCLUDED.line_y2,
+            entry_direction = EXCLUDED.entry_direction,
+            updated_at = NOW()
+        RETURNING id,
+            camera_id,
+            name,
+            enabled,
+            line_x1,
+            line_y1,
+            line_x2,
+            line_y2,
+            entry_direction,
+            created_at,
+            updated_at
+        """,
+        (
+            camera_id,
+            merged["name"],
+            merged["enabled"],
+            merged["line_x1"],
+            merged["line_y1"],
+            merged["line_x2"],
+            merged["line_y2"],
+            merged["entry_direction"].value
+            if hasattr(merged["entry_direction"], "value")
+            else merged["entry_direction"],
+        ),
+    )
+    return serialize_crossing_rule(cur.fetchone())
+
+
+def record_crossing_event(cur, data):
+    ensure_camera(cur, data.camera_id)
+    ensure_employee(cur, data.employee_id)
+    cur.execute(
+        """
+        SELECT c.room_id, ccr.id
+        FROM cameras c
+        LEFT JOIN camera_crossing_rules ccr ON ccr.camera_id = c.id
+        WHERE c.id = %s
+        """,
+        (data.camera_id,),
+    )
+    rule = cur.fetchone()
+    room_id = rule[0] if rule else None
+    rule_id = rule[1] if rule else None
+    crossed_at = parse_datetime_input(data.crossed_at) if data.crossed_at else datetime.now()
+    cur.execute(
+        """
+        INSERT INTO camera_crossing_events (
+            camera_id,
+            rule_id,
+            employee_id,
+            track_id,
+            direction,
+            crossing_direction,
+            confidence,
+            bbox,
+            crossed_at,
+            snapshot_path
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            data.camera_id,
+            rule_id,
+            data.employee_id,
+            data.track_id,
+            direction_value,
+            data.crossing_direction.value
+            if hasattr(data.crossing_direction, "value")
+            else data.crossing_direction,
+            data.confidence,
+            Json(data.bbox) if data.bbox is not None else None,
+            crossed_at,
+            data.snapshot_path,
+        ),
+    )
+    event_id = str(cur.fetchone()[0])
+    if direction_value == "entry":
+        record_room_presence_entry(
+            cur,
+            camera_id=data.camera_id,
+            room_id=str(room_id) if room_id else None,
+            employee_id=data.employee_id,
+            track_id=data.track_id,
+            entered_at=crossed_at,
+            confidence=data.confidence,
+        )
+    else:
+        mark_room_presence_pending_exit(
+            cur,
+            camera_id=data.camera_id,
+            room_id=str(room_id) if room_id else None,
+            track_id=data.track_id,
+            pending_exit_at=crossed_at,
+        )
+    return event_id
+
+
+def _open_room_presence(cur, camera_id: str, track_id: str, room_id: str | None):
+    cur.execute(
+        """
+        SELECT id, status
+        FROM camera_room_presence
+        WHERE camera_id = %s
+          AND track_id = %s
+          AND (room_id IS NOT DISTINCT FROM %s)
+          AND exited_at IS NULL
+        ORDER BY entered_at DESC
+        LIMIT 1
+        """,
+        (camera_id, track_id, room_id),
+    )
+    return cur.fetchone()
+
+
+def record_room_presence_entry(
+    cur,
+    camera_id: str,
+    room_id: str | None,
+    employee_id: str | None,
+    track_id: str,
+    entered_at: datetime,
+    confidence: float | None,
+):
+    open_row = _open_room_presence(cur, camera_id, track_id, room_id)
+    if open_row:
+        cur.execute(
+            """
+            UPDATE camera_room_presence
+            SET
+                employee_id = COALESCE(employee_id, %s),
+                pending_exit_at = NULL,
+                status = 'inside',
+                confidence = COALESCE(%s, confidence),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (employee_id, confidence, open_row[0]),
+        )
+        return str(open_row[0])
+
+    cur.execute(
+        """
+        INSERT INTO camera_room_presence (
+            employee_id,
+            track_id,
+            camera_id,
+            room_id,
+            entered_at,
+            confidence,
+            status
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, 'inside')
+        RETURNING id
+        """,
+        (employee_id, track_id, camera_id, room_id, entered_at, confidence),
+    )
+    return str(cur.fetchone()[0])
+
+
+def mark_room_presence_pending_exit(
+    cur,
+    camera_id: str,
+    room_id: str | None,
+    track_id: str,
+    pending_exit_at: datetime,
+):
+    open_row = _open_room_presence(cur, camera_id, track_id, room_id)
+    if not open_row:
+        return None
+    cur.execute(
+        """
+        UPDATE camera_room_presence
+        SET
+            pending_exit_at = %s,
+            status = 'pending_exit',
+            updated_at = NOW()
+        WHERE id = %s
+          AND exited_at IS NULL
+        RETURNING id
+        """,
+        (pending_exit_at, open_row[0]),
+    )
+    row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+def confirm_room_presence_exit(cur, camera_id: str, track_id: str, exited_at: datetime | None = None):
+    cur.execute(
+        """
+        SELECT id, entered_at, pending_exit_at
+        FROM camera_room_presence
+        WHERE camera_id = %s
+          AND track_id = %s
+          AND exited_at IS NULL
+          AND pending_exit_at IS NOT NULL
+        ORDER BY pending_exit_at DESC
+        LIMIT 1
+        """,
+        (camera_id, track_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    exit_time = exited_at or row[2] or datetime.now()
+    duration_seconds = max(0, int((exit_time - row[1]).total_seconds()))
+    cur.execute(
+        """
+        UPDATE camera_room_presence
+        SET
+            exited_at = %s,
+            duration_seconds = %s,
+            status = 'exited',
+            updated_at = NOW()
+        WHERE id = %s
+        RETURNING id
+        """,
+        (exit_time, duration_seconds, row[0]),
+    )
+    updated = cur.fetchone()
+    return str(updated[0]) if updated else None
+
+
+def cancel_room_presence_pending_exit(cur, camera_id: str, track_id: str):
+    cur.execute(
+        """
+        UPDATE camera_room_presence
+        SET
+            pending_exit_at = NULL,
+            status = 'inside',
+            updated_at = NOW()
+        WHERE camera_id = %s
+          AND track_id = %s
+          AND exited_at IS NULL
+          AND pending_exit_at IS NOT NULL
+        RETURNING id
+        """,
+        (camera_id, track_id),
+    )
+    return [str(row[0]) for row in cur.fetchall()]
+
+
+def list_room_presence(
+    cur,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    employee_id: str | None = None,
+    track_id: str | None = None,
+    room_id: str | None = None,
+    camera_id: str | None = None,
+    page: int = 1,
+    limit: int = 50,
+):
+    conditions = []
+    params: list[Any] = []
+    if date_from:
+        conditions.append("crp.entered_at >= %s")
+        params.append(date_from)
+    if date_to:
+        conditions.append("crp.entered_at <= %s")
+        params.append(date_to)
+    if employee_id:
+        conditions.append("crp.employee_id = %s")
+        params.append(employee_id)
+    if track_id:
+        conditions.append("crp.track_id = %s")
+        params.append(track_id)
+    if room_id:
+        conditions.append("crp.room_id = %s")
+        params.append(room_id)
+    if camera_id:
+        conditions.append("crp.camera_id = %s")
+        params.append(camera_id)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    cur.execute(f"SELECT COUNT(*) FROM camera_room_presence crp {where}", params)
+    total = cur.fetchone()[0]
+    offset = (page - 1) * limit
+    cur.execute(
+        f"""
+        SELECT
+            crp.id,
+            crp.employee_id,
+            e.full_name,
+            crp.track_id,
+            crp.camera_id,
+            c.name,
+            crp.room_id,
+            r.name,
+            crp.entered_at,
+            crp.pending_exit_at,
+            crp.exited_at,
+            crp.duration_seconds,
+            crp.confidence,
+            crp.status
+        FROM camera_room_presence crp
+        JOIN cameras c ON c.id = crp.camera_id
+        LEFT JOIN rooms r ON r.id = crp.room_id
+        LEFT JOIN employees e ON e.id = crp.employee_id
+        {where}
+        ORDER BY crp.entered_at DESC, crp.created_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        params + [limit, offset],
+    )
+    return total, [
+        {
+            "id": str(row[0]),
+            "employee_id": str(row[1]) if row[1] else None,
+            "employee_name": row[2],
+            "track_id": row[3],
+            "camera_id": str(row[4]),
+            "camera_name": row[5],
+            "room_id": str(row[6]) if row[6] else None,
+            "room_name": row[7],
+            "entered_at": str(row[8]),
+            "pending_exit_at": str(row[9]) if row[9] else None,
+            "exited_at": str(row[10]) if row[10] else None,
+            "duration_seconds": row[11],
+            "confidence": float(row[12]) if row[12] is not None else None,
+            "status": row[13],
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def list_crossing_events(
+    cur,
+    camera_id: str | None = None,
+    room_id: str | None = None,
+    employee_id: str | None = None,
+    direction: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    page: int = 1,
+    limit: int = 50,
+):
+    conditions = []
+    params: list[Any] = []
+    if camera_id:
+        conditions.append("cce.camera_id = %s")
+        params.append(camera_id)
+    if room_id:
+        conditions.append("c.room_id = %s")
+        params.append(room_id)
+    if employee_id:
+        conditions.append("cce.employee_id = %s")
+        params.append(employee_id)
+    if direction:
+        conditions.append("cce.direction = %s")
+        params.append(direction)
+    if date_from:
+        conditions.append("cce.crossed_at >= %s")
+        params.append(date_from)
+    if date_to:
+        conditions.append("cce.crossed_at <= %s")
+        params.append(date_to)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    cur.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM camera_crossing_events cce
+        JOIN cameras c ON c.id = cce.camera_id
+        {where}
+        """,
+        params,
+    )
+    total = cur.fetchone()[0]
+    offset = (page - 1) * limit
+    cur.execute(
+        f"""
+        SELECT
+            cce.id,
+            cce.camera_id,
+            c.name,
+            r.id,
+            r.name,
+            cce.employee_id,
+            e.full_name,
+            cce.track_id,
+            cce.direction,
+            cce.crossing_direction,
+            cce.confidence,
+            cce.crossed_at,
+            cce.bbox,
+            cce.snapshot_path
+        FROM camera_crossing_events cce
+        JOIN cameras c ON c.id = cce.camera_id
+        LEFT JOIN rooms r ON r.id = c.room_id
+        LEFT JOIN employees e ON e.id = cce.employee_id
+        {where}
+        ORDER BY cce.crossed_at DESC, cce.created_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        params + [limit, offset],
+    )
+    return total, [
+        {
+            "id": str(row[0]),
+            "camera_id": str(row[1]),
+            "camera_name": row[2],
+            "room_id": str(row[3]) if row[3] else None,
+            "room_name": row[4],
+            "employee_id": str(row[5]) if row[5] else None,
+            "employee_name": row[6],
+            "track_id": row[7],
+            "direction": row[8],
+            "crossing_direction": row[9],
+            "confidence": float(row[10]) if row[10] is not None else None,
+            "crossed_at": str(row[11]),
+            "bbox": row[12],
+            "snapshot_path": row[13],
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def link_camera_track_to_employee(cur, camera_id: str, track_id: str, employee_id: str):
+    ensure_camera(cur, camera_id)
+    ensure_employee(cur, employee_id)
+    cur.execute(
+        """
+        UPDATE camera_detection_events
+        SET employee_id = %s
+        WHERE camera_id = %s
+          AND track_id = %s
+          AND employee_id IS NULL
+        """,
+        (employee_id, camera_id, track_id),
+    )
+    detections_updated = cur.rowcount
+    cur.execute(
+        """
+        UPDATE camera_crossing_events
+        SET employee_id = %s
+        WHERE camera_id = %s
+          AND track_id = %s
+          AND employee_id IS NULL
+        """,
+        (employee_id, camera_id, track_id),
+    )
+    crossings_updated = cur.rowcount
+    cur.execute(
+        """
+        UPDATE camera_room_presence
+        SET employee_id = %s, updated_at = NOW()
+        WHERE camera_id = %s
+          AND track_id = %s
+          AND employee_id IS NULL
+        """,
+        (employee_id, camera_id, track_id),
+    )
+    presence_updated = cur.rowcount
+    return {
+        "camera_id": camera_id,
+        "track_id": track_id,
+        "employee_id": employee_id,
+        "detections_updated": detections_updated,
+        "crossings_updated": crossings_updated,
+        "presence_updated": presence_updated,
+    }
+
+
+def link_unknown_detection_to_employee(cur, detection_id: str, employee_id: str):
+    cur.execute(
+        """
+        SELECT camera_id, track_id
+        FROM camera_detection_events
+        WHERE id = %s
+        """,
+        (detection_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Detection not found")
+    return link_camera_track_to_employee(cur, str(row[0]), row[1], employee_id)
+
+
+def link_crossing_event_to_employee(cur, crossing_event_id: str, employee_id: str):
+    cur.execute(
+        """
+        SELECT camera_id, track_id
+        FROM camera_crossing_events
+        WHERE id = %s
+        """,
+        (crossing_event_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Crossing event not found")
+    return link_camera_track_to_employee(cur, str(row[0]), row[1], employee_id)
 
 
 def timeline_for_employee(cur, employee_id: str, limit: int):

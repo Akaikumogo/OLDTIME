@@ -28,6 +28,16 @@ class DetectionType(str, Enum):
     FACE_BODY = "FACE_BODY"
 
 
+class CrossingDirection(str, Enum):
+    negative_to_positive = "negative_to_positive"
+    positive_to_negative = "positive_to_negative"
+
+
+class CrossingEventDirection(str, Enum):
+    entry = "entry"
+    exit = "exit"
+
+
 class ZoneCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     type: ZoneType = ZoneType.UNKNOWN
@@ -261,6 +271,106 @@ class CameraDetectionCreate(BaseModel):
     disappeared_at: Optional[str] = None
     duration_seconds: Optional[int] = Field(None, ge=0)
     snapshot_path: Optional[str] = None
+
+
+class CameraCrossingRuleUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    enabled: Optional[bool] = None
+    line_x1: Optional[float] = Field(None, ge=0, le=1)
+    line_y1: Optional[float] = Field(None, ge=0, le=1)
+    line_x2: Optional[float] = Field(None, ge=0, le=1)
+    line_y2: Optional[float] = Field(None, ge=0, le=1)
+    entry_direction: Optional[CrossingDirection] = None
+
+
+class CameraCrossingRuleResponse(BaseModel):
+    id: Optional[str] = None
+    camera_id: str
+    name: str
+    enabled: bool
+    line_x1: float
+    line_y1: float
+    line_x2: float
+    line_y2: float
+    entry_direction: CrossingDirection
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CameraCrossingRuleEnvelope(BaseModel):
+    message: str
+    data: CameraCrossingRuleResponse
+
+
+class CameraCrossingEventCreate(BaseModel):
+    camera_id: str
+    employee_id: Optional[str] = None
+    track_id: str = Field(..., min_length=1, max_length=120)
+    direction: CrossingEventDirection
+    crossing_direction: CrossingDirection
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    bbox: Optional[dict[str, Any]] = None
+    crossed_at: Optional[str] = None
+    snapshot_path: Optional[str] = None
+
+
+class CameraCrossingEventItem(BaseModel):
+    id: str
+    camera_id: str
+    camera_name: str
+    room_id: Optional[str]
+    room_name: Optional[str]
+    employee_id: Optional[str]
+    employee_name: Optional[str]
+    track_id: str
+    direction: CrossingEventDirection
+    crossing_direction: CrossingDirection
+    confidence: Optional[float]
+    crossed_at: str
+    bbox: Optional[Any] = None
+    snapshot_path: Optional[str] = None
+
+
+class CameraCrossingEventListResponse(BaseModel):
+    meta: CameraListMeta
+    data: list[CameraCrossingEventItem]
+
+
+class CameraTrackLinkRequest(BaseModel):
+    employee_id: str
+
+
+class CameraRoomPresenceExitRequest(BaseModel):
+    camera_id: str
+    track_id: str = Field(..., min_length=1, max_length=120)
+    exited_at: Optional[str] = None
+
+
+class CameraRoomPresenceCancelExitRequest(BaseModel):
+    camera_id: str
+    track_id: str = Field(..., min_length=1, max_length=120)
+
+
+class CameraRoomPresenceItem(BaseModel):
+    id: str
+    employee_id: Optional[str]
+    employee_name: Optional[str]
+    track_id: str
+    camera_id: str
+    camera_name: str
+    room_id: Optional[str]
+    room_name: Optional[str]
+    entered_at: str
+    pending_exit_at: Optional[str]
+    exited_at: Optional[str]
+    duration_seconds: Optional[int]
+    confidence: Optional[float]
+    status: str
+
+
+class CameraRoomPresenceListResponse(BaseModel):
+    meta: CameraListMeta
+    data: list[CameraRoomPresenceItem]
 
 
 class EmployeeLocationEvent(BaseModel):

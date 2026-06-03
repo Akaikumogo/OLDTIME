@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { Button, Drawer, Empty, Select, Spin, Table, Tag, Tooltip } from 'antd';
+import { Button, Drawer, Empty, Select, Spin, Table, Tag, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { UserX } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
-import apiService, { type Camera, type UnknownDetectionItem } from '@/services/api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import apiService, { type Camera, type Employee, type UnknownDetectionItem } from '@/services/api';
 import { formatDateTime } from '@/utils/date';
 
-const columns: ColumnsType<UnknownDetectionItem> = [
+const baseColumns: ColumnsType<UnknownDetectionItem> = [
   {
     title: 'Kamera',
     dataIndex: 'camera_name',
@@ -68,6 +68,7 @@ export function UnknownDetectionsPanel({ cameras }: Props) {
   const [cameraId, setCameraId] = useState<string | undefined>();
   const [activeOnly, setActiveOnly] = useState(false);
   const [page, setPage] = useState(1);
+  const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: ['unknown-detections', cameraId, activeOnly, page],
@@ -82,8 +83,57 @@ export function UnknownDetectionsPanel({ cameras }: Props) {
     refetchInterval: open ? 10_000 : false
   });
 
+  const employeesQuery = useQuery({
+    queryKey: ['employees-for-unknown-links'],
+    queryFn: () =>
+      apiService.listEmployees({
+        page: 1,
+        limit: 500,
+        is_active: true,
+        sort: 'name',
+        order: 'asc'
+      }),
+    enabled: open
+  });
+
+  const linkMutation = useMutation({
+    mutationFn: ({ detectionId, employeeId }: { detectionId: string; employeeId: string }) =>
+      apiService.linkUnknownDetectionToEmployee(detectionId, employeeId),
+    onSuccess: () => {
+      message.success('Noma\'lum track xodimga biriktirildi');
+      void queryClient.invalidateQueries({ queryKey: ['unknown-detections'] });
+      void queryClient.invalidateQueries({ queryKey: ['camera-crossing-events'] });
+      void queryClient.invalidateQueries({ queryKey: ['cameras-live-unknown-detections'] });
+      void queryClient.invalidateQueries({ queryKey: ['cameras-live-matched-detections'] });
+    }
+  });
+
   const total = query.data?.meta.total ?? 0;
   const data = query.data?.data ?? [];
+  const employeeOptions = (employeesQuery.data?.data ?? []).map((employee: Employee) => ({
+    value: employee.id,
+    label: employee.full_name
+  }));
+  const columns: ColumnsType<UnknownDetectionItem> = [
+    ...baseColumns,
+    {
+      title: 'Xodimga biriktirish',
+      width: 260,
+      render: (_, row) => (
+        <Select
+          showSearch
+          placeholder="Employee tanlash"
+          style={{ width: 230 }}
+          optionFilterProp="label"
+          options={employeeOptions}
+          loading={employeesQuery.isFetching || linkMutation.isPending}
+          onSelect={(employeeId: string) =>
+            linkMutation.mutate({ detectionId: row.id, employeeId })
+          }
+        />
+      )
+    }
+  ];
 
   return (
     <>

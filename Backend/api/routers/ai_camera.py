@@ -16,6 +16,14 @@ from schemas.ai_camera import (
     CameraTalkResponse,
     CameraTestResponse,
     CameraUpdate,
+    CameraCrossingEventCreate,
+    CameraCrossingEventListResponse,
+    CameraCrossingRuleEnvelope,
+    CameraCrossingRuleUpdate,
+    CameraRoomPresenceCancelExitRequest,
+    CameraRoomPresenceExitRequest,
+    CameraRoomPresenceListResponse,
+    CameraTrackLinkRequest,
     EmployeeDailyTimelineResponse,
     EmployeeCameraAssignmentResponse,
     EmployeeCameraViewsResponse,
@@ -49,7 +57,14 @@ from services.ai_camera_service import (
     daily_timeline_for_employee,
     fetch_camera,
     fetch_room,
+    get_camera_crossing_rule,
+    cancel_room_presence_pending_exit,
+    confirm_room_presence_exit,
     inject_rtsp_credentials,
+    link_crossing_event_to_employee,
+    link_unknown_detection_to_employee,
+    list_crossing_events,
+    list_room_presence,
     list_room_cameras,
     list_unknown_detections,
     live_unknown_per_camera,
@@ -61,12 +76,14 @@ from services.ai_camera_service import (
     normalize_camera_values,
     store_face_embedding,
     productivity_for_employee,
+    record_crossing_event,
     record_detection_event,
     serialize_camera,
     serialize_room,
     serialize_zone,
     sync_room_cameras,
     timeline_for_employee,
+    upsert_camera_crossing_rule,
     upsert_employee_room_assignment,
 )
 from services.event_service import parse_filter_date
@@ -978,6 +995,182 @@ async def create_camera_detection(
 
 
 @router.get(
+    "/cameras/{camera_id}/crossing-rule",
+    response_model=CameraCrossingRuleEnvelope,
+    summary="Get camera line crossing rule",
+)
+def get_crossing_rule_endpoint(camera_id: str, user=Depends(require_role(["admin", "hr"]))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            data = get_camera_crossing_rule(cur, camera_id)
+    return {"message": "crossing rule loaded", "data": data}
+
+
+@router.put(
+    "/cameras/{camera_id}/crossing-rule",
+    response_model=CameraCrossingRuleEnvelope,
+    summary="Update camera line crossing rule",
+)
+def update_crossing_rule_endpoint(
+    camera_id: str,
+    data: CameraCrossingRuleUpdate,
+    user=Depends(require_role(["admin", "hr"])),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            rule = upsert_camera_crossing_rule(cur, camera_id, data)
+            conn.commit()
+    return {"message": "crossing rule updated", "data": rule}
+
+
+@router.post(
+    "/internal/camera-crossings",
+    response_model=MessageResponse,
+    summary="Store AI worker camera crossing event",
+)
+def create_camera_crossing(
+    data: CameraCrossingEventCreate,
+    _token=Depends(_require_camera_agent_token),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            event_id = record_crossing_event(cur, data)
+            conn.commit()
+    return {"message": f"camera crossing stored: {event_id}"}
+
+
+@router.post(
+    "/internal/camera-room-presence/confirm-exit",
+    response_model=MessageResponse,
+    summary="Confirm pending room exit after the track disappeared",
+)
+def confirm_camera_room_presence_exit(
+    data: CameraRoomPresenceExitRequest,
+    _token=Depends(_require_camera_agent_token),
+):
+    from services.device_service import parse_datetime_input
+
+    exited_at = parse_datetime_input(data.exited_at) if data.exited_at else None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            presence_id = confirm_room_presence_exit(
+                cur,
+                camera_id=data.camera_id,
+                track_id=data.track_id,
+                exited_at=exited_at,
+            )
+            conn.commit()
+    return {"message": f"room presence exit confirmed: {presence_id or 'none'}"}
+
+
+@router.post(
+    "/internal/camera-room-presence/cancel-exit",
+    response_model=MessageResponse,
+    summary="Cancel pending room exit when the track is still visible",
+)
+def cancel_camera_room_presence_exit(
+    data: CameraRoomPresenceCancelExitRequest,
+    _token=Depends(_require_camera_agent_token),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            ids = cancel_room_presence_pending_exit(cur, data.camera_id, data.track_id)
+            conn.commit()
+    return {"message": f"room presence pending exit cancelled: {len(ids)}"}
+
+
+@router.get(
+    "/camera-room-presence",
+    response_model=CameraRoomPresenceListResponse,
+    summary="List camera room presence history",
+)
+def list_camera_room_presence_endpoint(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    employee_id: str | None = Query(None),
+    track_id: str | None = Query(None),
+    room_id: str | None = Query(None),
+    camera_id: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    user=Depends(require_role(["admin", "hr"])),
+):
+    df = parse_filter_date(date_from) if date_from else None
+    dto = parse_filter_date(date_to, end_of_day=True) if date_to else None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            total, data = list_room_presence(
+                cur,
+                date_from=df,
+                date_to=dto,
+                employee_id=employee_id,
+                track_id=track_id,
+                room_id=room_id,
+                camera_id=camera_id,
+                page=page,
+                limit=limit,
+            )
+    return {"meta": {"page": page, "limit": limit, "total": total}, "data": data}
+
+
+@router.get(
+    "/camera-crossing-events",
+    response_model=CameraCrossingEventListResponse,
+    summary="List camera entry/exit crossing events",
+)
+def list_crossing_events_endpoint(
+    camera_id: str | None = Query(None),
+    room_id: str | None = Query(None),
+    employee_id: str | None = Query(None),
+    direction: str | None = Query(None, pattern="^(entry|exit)$"),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    user=Depends(require_role(["admin", "hr"])),
+):
+    df = parse_filter_date(date_from) if date_from else None
+    dto = parse_filter_date(date_to, end_of_day=True) if date_to else None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            total, data = list_crossing_events(
+                cur,
+                camera_id=camera_id,
+                room_id=room_id,
+                employee_id=employee_id,
+                direction=direction,
+                date_from=df,
+                date_to=dto,
+                page=page,
+                limit=limit,
+            )
+    return {"meta": {"page": page, "limit": limit, "total": total}, "data": data}
+
+
+@router.post(
+    "/camera-crossing-events/{event_id}/link-employee",
+    response_model=MessageResponse,
+    summary="Link a camera crossing track to an employee",
+)
+def link_crossing_event_employee(
+    event_id: str,
+    data: CameraTrackLinkRequest,
+    user=Depends(require_role(["admin", "hr"])),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            result = link_crossing_event_to_employee(cur, event_id, data.employee_id)
+            conn.commit()
+    return {
+        "message": (
+            "camera track linked: "
+            f"{result['detections_updated']} detections, "
+            f"{result['crossings_updated']} crossings"
+        )
+    }
+
+
+@router.get(
     "/unknown-detections",
     response_model=UnknownDetectionListResponse,
     summary="List unknown person detections (employee_id IS NULL)",
@@ -1008,6 +1201,29 @@ def list_unknown_detections_endpoint(
                 limit=limit,
             )
     return {"meta": {"page": page, "limit": limit, "total": total}, "data": data}
+
+
+@router.post(
+    "/unknown-detections/{detection_id}/link-employee",
+    response_model=MessageResponse,
+    summary="Link an unknown camera detection track to an employee",
+)
+def link_unknown_detection_employee(
+    detection_id: str,
+    data: CameraTrackLinkRequest,
+    user=Depends(require_role(["admin", "hr"])),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            result = link_unknown_detection_to_employee(cur, detection_id, data.employee_id)
+            conn.commit()
+    return {
+        "message": (
+            "camera track linked: "
+            f"{result['detections_updated']} detections, "
+            f"{result['crossings_updated']} crossings"
+        )
+    }
 
 
 @router.get(
@@ -1061,9 +1277,20 @@ def list_internal_active_cameras(_token=Depends(_require_camera_agent_token)):
                     z.type,
                     c.room_id,
                     c.has_audio,
-                    c.has_speaker
+                    c.has_speaker,
+                    ccr.id,
+                    ccr.name,
+                    ccr.enabled,
+                    ccr.line_x1,
+                    ccr.line_y1,
+                    ccr.line_x2,
+                    ccr.line_y2,
+                    ccr.entry_direction,
+                    ccr.created_at,
+                    ccr.updated_at
                 FROM cameras c
                 JOIN zones z ON z.id = c.zone_id
+                LEFT JOIN camera_crossing_rules ccr ON ccr.camera_id = c.id
                 WHERE c.status <> 'offline'
                 ORDER BY c.created_at ASC
                 """,
@@ -1086,6 +1313,21 @@ def list_internal_active_cameras(_token=Depends(_require_camera_agent_token)):
                 "room_id": str(row[11]) if row[11] else None,
                 "has_audio": bool(row[12]),
                 "has_speaker": bool(row[13]),
+                "crossing_rule": {
+                    "id": str(row[14]),
+                    "camera_id": str(row[0]),
+                    "name": row[15],
+                    "enabled": bool(row[16]),
+                    "line_x1": float(row[17]),
+                    "line_y1": float(row[18]),
+                    "line_x2": float(row[19]),
+                    "line_y2": float(row[20]),
+                    "entry_direction": row[21],
+                    "created_at": str(row[22]) if row[22] else None,
+                    "updated_at": str(row[23]) if row[23] else None,
+                }
+                if row[14]
+                else None,
             }
             for row in rows
         ]

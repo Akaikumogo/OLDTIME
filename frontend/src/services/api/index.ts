@@ -1381,6 +1381,75 @@ class ApiService {
     return data;
   }
 
+  async getCameraCrossingRule(cameraId: string) {
+    const { data } = await this.api.get<{
+      message: string;
+      data: CameraCrossingRule;
+    }>(`/cameras/${cameraId}/crossing-rule`);
+    return data.data;
+  }
+
+  async updateCameraCrossingRule(
+    cameraId: string,
+    body: CameraCrossingRuleInput
+  ) {
+    const { data } = await this.api.put<{
+      message: string;
+      data: CameraCrossingRule;
+    }>(`/cameras/${cameraId}/crossing-rule`, body);
+    return data.data;
+  }
+
+  async listCameraCrossingEvents(params?: {
+    camera_id?: string;
+    room_id?: string;
+    employee_id?: string;
+    direction?: CrossingEventDirection;
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const { data } = await this.api.get<CameraCrossingEventListResponse>(
+      '/camera-crossing-events',
+      { params }
+    );
+    return data;
+  }
+
+  async listCameraRoomPresence(params?: {
+    date_from?: string;
+    date_to?: string;
+    employee_id?: string;
+    track_id?: string;
+    room_id?: string;
+    camera_id?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const { data } = await this.api.get<CameraRoomPresenceListResponse>(
+      '/camera-room-presence',
+      { params }
+    );
+    return data;
+  }
+
+  async linkCameraCrossingEventToEmployee(eventId: string, employeeId: string) {
+    const { data } = await this.api.post<MessageResponse>(
+      `/camera-crossing-events/${eventId}/link-employee`,
+      { employee_id: employeeId }
+    );
+    return data;
+  }
+
+  async linkUnknownDetectionToEmployee(detectionId: string, employeeId: string) {
+    const { data } = await this.api.post<MessageResponse>(
+      `/unknown-detections/${detectionId}/link-employee`,
+      { employee_id: employeeId }
+    );
+    return data;
+  }
+
   async testCamera(cameraId: string) {
     const { data } = await this.api.post<CameraTestResponse>(
       `/cameras/${cameraId}/test`
@@ -1681,6 +1750,12 @@ export type CameraStatus =
 
 export type DetectionType = 'FACE' | 'BODY' | 'FACE_BODY';
 
+export type CrossingDirection =
+  | 'negative_to_positive'
+  | 'positive_to_negative';
+
+export type CrossingEventDirection = 'entry' | 'exit';
+
 export type Zone = {
   id: string;
   name: string;
@@ -1783,6 +1858,77 @@ export type CameraInput = {
   has_audio?: boolean;
   has_speaker?: boolean;
   status?: CameraStatus;
+};
+
+export type CameraCrossingRule = {
+  id?: string | null;
+  camera_id: string;
+  name: string;
+  enabled: boolean;
+  line_x1: number;
+  line_y1: number;
+  line_x2: number;
+  line_y2: number;
+  entry_direction: CrossingDirection;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CameraCrossingRuleInput = Partial<
+  Pick<
+    CameraCrossingRule,
+    | 'name'
+    | 'enabled'
+    | 'line_x1'
+    | 'line_y1'
+    | 'line_x2'
+    | 'line_y2'
+    | 'entry_direction'
+  >
+>;
+
+export type CameraCrossingEventItem = {
+  id: string;
+  camera_id: string;
+  camera_name: string;
+  room_id?: string | null;
+  room_name?: string | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  track_id: string;
+  direction: CrossingEventDirection;
+  crossing_direction: CrossingDirection;
+  confidence?: number | null;
+  crossed_at: string;
+  bbox?: DetectionBbox | null;
+  snapshot_path?: string | null;
+};
+
+export type CameraCrossingEventListResponse = {
+  meta: { page: number; limit: number; total: number };
+  data: CameraCrossingEventItem[];
+};
+
+export type CameraRoomPresenceItem = {
+  id: string;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  track_id: string;
+  camera_id: string;
+  camera_name: string;
+  room_id?: string | null;
+  room_name?: string | null;
+  entered_at: string;
+  pending_exit_at?: string | null;
+  exited_at?: string | null;
+  duration_seconds?: number | null;
+  confidence?: number | null;
+  status: 'inside' | 'pending_exit' | 'exited' | string;
+};
+
+export type CameraRoomPresenceListResponse = {
+  meta: { page: number; limit: number; total: number };
+  data: CameraRoomPresenceItem[];
 };
 
 export type CameraListResponse = {

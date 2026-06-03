@@ -1,13 +1,18 @@
-import { useState } from 'react';
-import { Button, Empty, Form, Input, Modal, Popconfirm, Select, Switch, Table, Tag, message } from 'antd';
+import { useEffect, useState, type PointerEvent } from 'react';
+import { Button, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Camera as CameraIcon, Edit, Plus, RefreshCw, Trash2, Wifi } from 'lucide-react';
+import { ArrowLeftRight, Camera as CameraIcon, Edit, Plus, RefreshCw, Trash2, Wifi } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 import apiService, {
+  BACKEND_ORIGIN,
   type Camera,
+  type CameraCrossingEventItem,
+  type CameraCrossingRuleInput,
   type CameraInput,
+  type CameraRoomPresenceItem,
   type CameraStatus,
+  type Employee,
   type Room,
   type Zone
 } from '@/services/api';
@@ -15,13 +20,105 @@ import { CameraStatusBadge } from '@/components/camera/CameraStatusBadge';
 import { canWrite } from '@/utils/can';
 
 type CameraFormValues = CameraInput;
+type CrossingFormValues = CameraCrossingRuleInput;
+type DragPoint = 'start' | 'end';
+
+const DEFAULT_CROSSING_RULE: Required<CrossingFormValues> = {
+  name: 'Main crossing line',
+  enabled: false,
+  line_x1: 0.5,
+  line_y1: 0.1,
+  line_x2: 0.5,
+  line_y2: 0.9,
+  entry_direction: 'negative_to_positive'
+};
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDuration(seconds?: number | null) {
+  if (seconds == null) return '-';
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  if (minutes < 60) return `${minutes} daq ${rem}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} soat ${minutes % 60} daq`;
+}
+
+function tokenizedStreamUrl(path?: string | null) {
+  if (!path) return null;
+  const token =
+    localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
+  const base = path.startsWith('http') ? path : `${BACKEND_ORIGIN}${path}`;
+  const url = new URL(base);
+  url.searchParams.set('profile', 'main');
+  url.searchParams.set('format', 'mp4');
+  if (token) url.searchParams.set('token', token);
+  return url.toString();
+}
+
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function roundCoord(value: number) {
+  return Math.round(clamp01(value) * 1000) / 1000;
+}
+
+function crossingGeometry(rule: Required<CrossingFormValues>) {
+  const dx = rule.line_x2 - rule.line_x1;
+  const dy = rule.line_y2 - rule.line_y1;
+  const length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length;
+  const ny = dx / length;
+  const mx = (rule.line_x1 + rule.line_x2) / 2;
+  const my = (rule.line_y1 + rule.line_y2) / 2;
+
+  const positive = {
+    x: clamp01(mx + nx * 0.18),
+    y: clamp01(my + ny * 0.18)
+  };
+  const negative = {
+    x: clamp01(mx - nx * 0.18),
+    y: clamp01(my - ny * 0.18)
+  };
+  const positiveNear = {
+    x: clamp01(mx + nx * 0.09),
+    y: clamp01(my + ny * 0.09)
+  };
+  const negativeNear = {
+    x: clamp01(mx - nx * 0.09),
+    y: clamp01(my - ny * 0.09)
+  };
+
+  const entryIsPositive = rule.entry_direction === 'negative_to_positive';
+  return {
+    entry: entryIsPositive ? positive : negative,
+    exit: entryIsPositive ? negative : positive,
+    arrowStart: entryIsPositive ? negativeNear : positiveNear,
+    arrowEnd: entryIsPositive ? positiveNear : negativeNear
+  };
+}
 
 const Cameras = () => {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCamera, setEditingCamera] = useState<Camera | null>(null);
+  const [crossingCamera, setCrossingCamera] = useState<Camera | null>(null);
+  const [crossingDraft, setCrossingDraft] = useState<Required<CrossingFormValues>>(DEFAULT_CROSSING_RULE);
+  const [dragPoint, setDragPoint] = useState<DragPoint | null>(null);
+  const [presenceDate, setPresenceDate] = useState(localDateKey());
+  const [presenceEmployeeId, setPresenceEmployeeId] = useState<string | undefined>();
+  const [presenceRoomId, setPresenceRoomId] = useState<string | undefined>();
+  const [presenceCameraId, setPresenceCameraId] = useState<string | undefined>();
+  const [presencePage, setPresencePage] = useState(1);
   const [form] = Form.useForm<CameraFormValues>();
+  const [crossingForm] = Form.useForm<CrossingFormValues>();
   const queryClient = useQueryClient();
   const writable = canWrite();
 
@@ -39,6 +136,73 @@ const Cameras = () => {
     queryKey: ['rooms-for-cameras'],
     queryFn: () => apiService.listRooms()
   });
+
+  const employeesQuery = useQuery({
+    queryKey: ['employees-for-camera-links'],
+    queryFn: () =>
+      apiService.listEmployees({
+        page: 1,
+        limit: 500,
+        is_active: true,
+        sort: 'name',
+        order: 'asc'
+      })
+  });
+
+  const today = localDateKey();
+  const crossingEventsQuery = useQuery({
+    queryKey: ['camera-crossing-events', today],
+    queryFn: () =>
+      apiService.listCameraCrossingEvents({
+        date_from: today,
+        date_to: today,
+        limit: 50
+      }),
+    refetchInterval: 10_000
+  });
+
+  const roomPresenceQuery = useQuery({
+    queryKey: [
+      'camera-room-presence',
+      presenceDate,
+      presenceEmployeeId,
+      presenceRoomId,
+      presenceCameraId,
+      presencePage
+    ],
+    queryFn: () =>
+      apiService.listCameraRoomPresence({
+        date_from: presenceDate,
+        date_to: presenceDate,
+        employee_id: presenceEmployeeId,
+        room_id: presenceRoomId,
+        camera_id: presenceCameraId,
+        page: presencePage,
+        limit: 50
+      }),
+    refetchInterval: 10_000
+  });
+
+  const crossingRuleQuery = useQuery({
+    queryKey: ['camera-crossing-rule', crossingCamera?.id],
+    queryFn: () => apiService.getCameraCrossingRule(crossingCamera!.id),
+    enabled: Boolean(crossingCamera)
+  });
+
+  useEffect(() => {
+    if (!crossingRuleQuery.data) return;
+    const next = {
+      name: crossingRuleQuery.data.name,
+      enabled: crossingRuleQuery.data.enabled,
+      line_x1: crossingRuleQuery.data.line_x1,
+      line_y1: crossingRuleQuery.data.line_y1,
+      line_x2: crossingRuleQuery.data.line_x2,
+      line_y2: crossingRuleQuery.data.line_y2,
+      entry_direction: crossingRuleQuery.data.entry_direction
+    };
+    setCrossingDraft(next);
+    crossingForm.setFieldsValue(next);
+  }, [crossingForm, crossingRuleQuery.data]);
 
   const createMutation = useMutation({
     mutationFn: (values: CameraFormValues) => apiService.createCamera(values),
@@ -77,6 +241,28 @@ const Cameras = () => {
     }
   });
 
+  const updateCrossingMutation = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: CrossingFormValues }) =>
+      apiService.updateCameraCrossingRule(id, values),
+    onSuccess: () => {
+      message.success('Kamera chegarasi saqlandi');
+      setCrossingCamera(null);
+      void queryClient.invalidateQueries({ queryKey: ['camera-crossing-rule'] });
+    }
+  });
+
+  const linkCrossingMutation = useMutation({
+    mutationFn: ({ eventId, employeeId }: { eventId: string; employeeId: string }) =>
+      apiService.linkCameraCrossingEventToEmployee(eventId, employeeId),
+    onSuccess: () => {
+      message.success('Track xodimga biriktirildi');
+      void queryClient.invalidateQueries({ queryKey: ['camera-crossing-events'] });
+      void queryClient.invalidateQueries({ queryKey: ['unknown-detections'] });
+      void queryClient.invalidateQueries({ queryKey: ['cameras-live-unknown-detections'] });
+      void queryClient.invalidateQueries({ queryKey: ['cameras-live-matched-detections'] });
+    }
+  });
+
   const openCreate = () => {
     setEditingCamera(null);
     form.setFieldsValue({
@@ -105,6 +291,12 @@ const Cameras = () => {
     setIsModalOpen(true);
   };
 
+  const openCrossing = (camera: Camera) => {
+    setCrossingCamera(camera);
+    setCrossingDraft(DEFAULT_CROSSING_RULE);
+    crossingForm.setFieldsValue(DEFAULT_CROSSING_RULE);
+  };
+
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingCamera(null);
@@ -120,6 +312,31 @@ const Cameras = () => {
       return;
     }
     createMutation.mutate(values);
+  };
+
+  const saveCrossing = async () => {
+    if (!crossingCamera) return;
+    const values = await crossingForm.validateFields();
+    updateCrossingMutation.mutate({ id: crossingCamera.id, values });
+  };
+
+  const updateDraggedPoint = (event: PointerEvent<SVGSVGElement>) => {
+    if (!dragPoint) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = roundCoord((event.clientX - rect.left) / rect.width);
+    const y = roundCoord((event.clientY - rect.top) / rect.height);
+    const values =
+      dragPoint === 'start'
+        ? { line_x1: x, line_y1: y }
+        : { line_x2: x, line_y2: y };
+    crossingForm.setFieldsValue(values);
+    setCrossingDraft((current) => ({ ...current, ...values }));
+  };
+
+  const startPointDrag = (point: DragPoint) => (event: PointerEvent<SVGCircleElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragPoint(point);
   };
 
   const columns: ColumnsType<Camera> = [
@@ -193,6 +410,12 @@ const Cameras = () => {
               <Button
                 type="text"
                 size="small"
+                icon={<ArrowLeftRight size={16} />}
+                onClick={() => openCrossing(camera)}
+              />
+              <Button
+                type="text"
+                size="small"
                 icon={<Edit size={16} />}
                 onClick={() => openEdit(camera)}
               />
@@ -210,6 +433,104 @@ const Cameras = () => {
       )
     }
   ];
+
+  const crossingEventColumns: ColumnsType<CameraCrossingEventItem> = [
+    {
+      title: 'Vaqt',
+      dataIndex: 'crossed_at',
+      width: 120,
+      render: (value: string) => new Date(value).toLocaleTimeString()
+    },
+    {
+      title: 'Holat',
+      dataIndex: 'direction',
+      width: 110,
+      render: (direction: CameraCrossingEventItem['direction']) => (
+        <Tag color={direction === 'entry' ? 'green' : 'orange'}>
+          {direction === 'entry' ? 'Kirdi' : 'Chiqdi'}
+        </Tag>
+      )
+    },
+    {
+      title: 'Kim',
+      render: (_, event) =>
+        event.employee_name ? (
+          event.employee_name
+        ) : (
+          <Select
+            showSearch
+            placeholder={`Track: ${event.track_id.slice(0, 12)}`}
+            style={{ width: 240 }}
+            optionFilterProp="label"
+            loading={employeesQuery.isFetching || linkCrossingMutation.isPending}
+            onSelect={(employeeId: string) =>
+              linkCrossingMutation.mutate({ eventId: event.id, employeeId })
+            }
+            options={(employeesQuery.data?.data ?? []).map((employee: Employee) => ({
+              value: employee.id,
+              label: employee.full_name
+            }))}
+          />
+        )
+    },
+    {
+      title: 'Xona',
+      render: (_, event) => event.room_name || '-'
+    },
+    {
+      title: 'Kamera',
+      dataIndex: 'camera_name',
+      width: 220
+    }
+  ];
+
+  const roomPresenceColumns: ColumnsType<CameraRoomPresenceItem> = [
+    {
+      title: 'Kim',
+      render: (_, row) => row.employee_name || `Track: ${row.track_id.slice(0, 14)}`
+    },
+    {
+      title: 'Xona',
+      render: (_, row) => row.room_name || '-'
+    },
+    {
+      title: 'Kamera',
+      dataIndex: 'camera_name',
+      width: 200
+    },
+    {
+      title: 'Kirdi',
+      dataIndex: 'entered_at',
+      width: 120,
+      render: (value: string) => new Date(value).toLocaleTimeString()
+    },
+    {
+      title: 'Chiqdi',
+      dataIndex: 'exited_at',
+      width: 120,
+      render: (value: string | null | undefined, row) =>
+        value ? new Date(value).toLocaleTimeString() : (
+          <Tag color={row.status === 'pending_exit' ? 'gold' : 'green'}>
+            {row.status === 'pending_exit' ? 'Tekshirilmoqda' : 'Ichkarida'}
+          </Tag>
+        )
+    },
+    {
+      title: 'Davomiyligi',
+      dataIndex: 'duration_seconds',
+      width: 140,
+      render: (value?: number | null) => formatDuration(value)
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      width: 120,
+      render: (value: string) => <Tag>{value}</Tag>
+    }
+  ];
+
+  const crossingStreamSrc = tokenizedStreamUrl(crossingCamera?.stream_url);
+  const crossingSides = crossingGeometry(crossingDraft);
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -245,7 +566,7 @@ const Cameras = () => {
           pagination={{
             current: page,
             pageSize: limit,
-            total: camerasQuery.data?.meta.total ?? 0,
+            total: camerasQuery.data?.meta?.total ?? 0,
             showSizeChanger: true,
             onChange: (newPage, newLimit) => {
               setPage(newPage);
@@ -255,6 +576,117 @@ const Cameras = () => {
           locale={{ emptyText: <Empty description="Kamera topilmadi" /> }}
         />
       </motion.div>
+
+      <div className="mt-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-950 dark:text-white">
+            Bugungi kirish/chiqish
+          </h3>
+          <Button
+            icon={<RefreshCw size={16} />}
+            loading={crossingEventsQuery.isFetching}
+            onClick={() => void crossingEventsQuery.refetch()}
+          >
+            Yangilash
+          </Button>
+        </div>
+        <Table
+          rowKey="id"
+          columns={crossingEventColumns}
+          dataSource={crossingEventsQuery.data?.data ?? []}
+          loading={crossingEventsQuery.isLoading}
+          pagination={false}
+          locale={{ emptyText: <Empty description="Bugun crossing event yo'q" /> }}
+        />
+      </div>
+
+      <div className="mt-6">
+        <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <h3 className="text-lg font-semibold text-slate-950 dark:text-white">
+            Kunlik xona tarixi
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              type="date"
+              value={presenceDate}
+              style={{ width: 160 }}
+              onChange={(event) => {
+                setPresenceDate(event.target.value || localDateKey());
+                setPresencePage(1);
+              }}
+            />
+            <Select
+              allowClear
+              showSearch
+              placeholder="Employee"
+              optionFilterProp="label"
+              style={{ width: 220 }}
+              value={presenceEmployeeId}
+              onChange={(value) => {
+                setPresenceEmployeeId(value);
+                setPresencePage(1);
+              }}
+              options={(employeesQuery.data?.data ?? []).map((employee: Employee) => ({
+                value: employee.id,
+                label: employee.full_name
+              }))}
+            />
+            <Select
+              allowClear
+              showSearch
+              placeholder="Room"
+              optionFilterProp="label"
+              style={{ width: 180 }}
+              value={presenceRoomId}
+              onChange={(value) => {
+                setPresenceRoomId(value);
+                setPresencePage(1);
+              }}
+              options={(roomsQuery.data ?? []).map((room: Room) => ({
+                value: room.id,
+                label: room.name
+              }))}
+            />
+            <Select
+              allowClear
+              showSearch
+              placeholder="Camera"
+              optionFilterProp="label"
+              style={{ width: 200 }}
+              value={presenceCameraId}
+              onChange={(value) => {
+                setPresenceCameraId(value);
+                setPresencePage(1);
+              }}
+              options={(camerasQuery.data?.data ?? []).map((camera: Camera) => ({
+                value: camera.id,
+                label: camera.name
+              }))}
+            />
+            <Button
+              icon={<RefreshCw size={16} />}
+              loading={roomPresenceQuery.isFetching}
+              onClick={() => void roomPresenceQuery.refetch()}
+            >
+              Yangilash
+            </Button>
+          </div>
+        </div>
+        <Table
+          rowKey="id"
+          columns={roomPresenceColumns}
+          dataSource={roomPresenceQuery.data?.data ?? []}
+          loading={roomPresenceQuery.isLoading}
+          pagination={{
+            current: presencePage,
+            pageSize: 50,
+            total: roomPresenceQuery.data?.meta?.total ?? 0,
+            onChange: setPresencePage,
+            showTotal: (total) => `Jami: ${total}`
+          }}
+          locale={{ emptyText: <Empty description="Bu sana uchun xona tarixi yo'q" /> }}
+        />
+      </div>
 
       <Modal
         title={editingCamera ? 'Kamera tahrirlash' : 'Kamera qo\'shish'}
@@ -329,6 +761,145 @@ const Cameras = () => {
             <Form.Item name="has_speaker" label="Speaker talkback" valuePropName="checked">
               <Switch />
             </Form.Item>
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={crossingCamera ? `${crossingCamera.name} - kirish/chiqish chegarasi` : 'Kirish/chiqish chegarasi'}
+        open={Boolean(crossingCamera)}
+        onCancel={() => setCrossingCamera(null)}
+        onOk={() => void saveCrossing()}
+        width={760}
+        confirmLoading={updateCrossingMutation.isPending}
+      >
+        <Form
+          form={crossingForm}
+          layout="vertical"
+          onValuesChange={(_, values) => {
+            setCrossingDraft({ ...DEFAULT_CROSSING_RULE, ...values });
+          }}
+        >
+          <div className="mb-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+            <div className="relative aspect-video">
+              {crossingStreamSrc ? (
+                <video
+                  key={crossingStreamSrc}
+                  className="h-full w-full object-cover"
+                  src={crossingStreamSrc}
+                  autoPlay
+                  muted
+                  playsInline
+                  controls={false}
+                />
+              ) : null}
+              <svg
+                className="absolute inset-0 h-full w-full"
+                viewBox="0 0 100 56.25"
+                preserveAspectRatio="none"
+                onPointerMove={updateDraggedPoint}
+                onPointerUp={() => setDragPoint(null)}
+                onPointerLeave={() => setDragPoint(null)}
+              >
+                <defs>
+                  <marker id="crossing-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+                    <path d="M0,0 L5,2.5 L0,5 Z" fill="#22c55e" />
+                  </marker>
+                </defs>
+                <line
+                  x1={crossingDraft.line_x1 * 100}
+                  y1={crossingDraft.line_y1 * 56.25}
+                  x2={crossingDraft.line_x2 * 100}
+                  y2={crossingDraft.line_y2 * 56.25}
+                  stroke="#f97316"
+                  strokeWidth="1"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <line
+                  x1={crossingSides.arrowStart.x * 100}
+                  y1={crossingSides.arrowStart.y * 56.25}
+                  x2={crossingSides.arrowEnd.x * 100}
+                  y2={crossingSides.arrowEnd.y * 56.25}
+                  stroke="#22c55e"
+                  strokeWidth="1"
+                  markerEnd="url(#crossing-arrow)"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <text
+                  x={crossingSides.entry.x * 100}
+                  y={crossingSides.entry.y * 56.25}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fill="#ffffff"
+                  fontSize="3.2"
+                  fontWeight="700"
+                  paintOrder="stroke"
+                  stroke="#16a34a"
+                  strokeWidth="1"
+                >
+                  Kirish
+                </text>
+                <text
+                  x={crossingSides.exit.x * 100}
+                  y={crossingSides.exit.y * 56.25}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fill="#ffffff"
+                  fontSize="3.2"
+                  fontWeight="700"
+                  paintOrder="stroke"
+                  stroke="#f97316"
+                  strokeWidth="1"
+                >
+                  Chiqish
+                </text>
+                <circle
+                  cx={crossingDraft.line_x1 * 100}
+                  cy={crossingDraft.line_y1 * 56.25}
+                  r="1.8"
+                  fill="#f97316"
+                  stroke="#ffffff"
+                  strokeWidth="0.5"
+                  className="cursor-grab"
+                  onPointerDown={startPointDrag('start')}
+                />
+                <circle
+                  cx={crossingDraft.line_x2 * 100}
+                  cy={crossingDraft.line_y2 * 56.25}
+                  r="1.8"
+                  fill="#f97316"
+                  stroke="#ffffff"
+                  strokeWidth="0.5"
+                  className="cursor-grab"
+                  onPointerDown={startPointDrag('end')}
+                />
+              </svg>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Form.Item name="name" label="Nomi" rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="enabled" label="Faol" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item name="entry_direction" label="Kirish yo'nalishi" rules={[{ required: true }]}>
+              <Select
+                options={[
+                  { value: 'negative_to_positive', label: '1-tomon: kirish' },
+                  { value: 'positive_to_negative', label: '2-tomon: kirish' }
+                ]}
+              />
+            </Form.Item>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            {(['line_x1', 'line_y1', 'line_x2', 'line_y2'] as const).map((field) => (
+              <Form.Item key={field} name={field} label={field} rules={[{ required: true }]}>
+                <InputNumber min={0} max={1} step={0.01} className="w-full" />
+              </Form.Item>
+            ))}
           </div>
         </Form>
       </Modal>

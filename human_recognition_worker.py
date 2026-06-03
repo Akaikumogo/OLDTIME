@@ -79,6 +79,9 @@ TRACK_CENTER_DISTANCE = float(os.getenv("WORKER_TRACK_CENTER_DISTANCE", "160"))
 TRACK_STALE_SECONDS = float(os.getenv("WORKER_TRACK_STALE_SECONDS", "4"))
 DETECTION_SEND_INTERVAL_SECONDS = float(os.getenv("WORKER_DETECTION_SEND_INTERVAL_SECONDS", "1"))
 FRAME_SKIP = max(1, int(os.getenv("WORKER_FRAME_SKIP", "3" if DEVICE == "cpu" else "2")))
+CROSSING_COOLDOWN_SECONDS = float(os.getenv("WORKER_CROSSING_COOLDOWN_SECONDS", "3"))
+CROSSING_SIDE_EPSILON = float(os.getenv("WORKER_CROSSING_SIDE_EPSILON", "0.003"))
+ROOM_PRESENCE_EXIT_CONFIRM_SECONDS = float(os.getenv("WORKER_ROOM_PRESENCE_EXIT_CONFIRM_SECONDS", "4"))
 
 # Embedding sozlamalari
 EMBEDDING_DIM = 512  # FaceNet512 / InsightFace buffalo_l
@@ -123,6 +126,37 @@ class Track:
             self.last_seen = datetime.now()
         if self.first_seen is None:
             self.first_seen = datetime.now()
+
+
+@dataclass
+class PendingRoomExit:
+    track_id: str
+    pending_at: datetime
+    detection: Detection
+
+
+class RoomPresenceTrackState:
+    """Track bo'yicha room-presence pending exit holatini ushlab turadi."""
+
+    def __init__(self):
+        self.pending_exits: Dict[str, PendingRoomExit] = {}
+
+    def mark_pending_exit(self, track_id: str, detection: Detection, pending_at: datetime):
+        self.pending_exits[track_id] = PendingRoomExit(track_id, pending_at, detection)
+
+    def cancel_pending_exit(self, track_id: str) -> Optional[PendingRoomExit]:
+        return self.pending_exits.pop(track_id, None)
+
+    def pending_exit(self, track_id: str) -> Optional[PendingRoomExit]:
+        return self.pending_exits.get(track_id)
+
+    def active_tracks_to_cancel(self, active_track_ids: set[str], now: datetime) -> list[PendingRoomExit]:
+        due: list[PendingRoomExit] = []
+        for track_id in active_track_ids:
+            pending = self.pending_exits.get(track_id)
+            if pending and (now - pending.pending_at).total_seconds() >= ROOM_PRESENCE_EXIT_CONFIRM_SECONDS:
+                due.append(pending)
+        return due
 
 
 # ============================================================================
@@ -416,16 +450,21 @@ class CameraStreamHandler:
         rtsp_url: str,
         model_manager: ModelManager,
         matching_engine: FaceMatchingEngine,
+        crossing_rule: Optional[Dict] = None,
     ):
         self.camera_id = camera_id
         self.camera_name = camera_name
         self.rtsp_url = rtsp_url
         self.model_manager = model_manager
         self.matching_engine = matching_engine
+        self.crossing_rule = crossing_rule if crossing_rule and crossing_rule.get("enabled") else None
 
         self.cap = None
         self.active_tracks: Dict[str, Track] = {}
         self.last_sent_by_track: Dict[str, datetime] = {}
+        self.track_sides: Dict[str, int] = {}
+        self.last_crossing_by_track: Dict[str, datetime] = {}
+        self.room_presence_state = RoomPresenceTrackState()
         self.next_track_id = 0
         self.stop_event = Event()
         self.thread = None
@@ -611,15 +650,87 @@ class CameraStreamHandler:
                     seen_at=track.last_seen,
                     disappeared_at=now,
                 )
+                pending_exit = self.room_presence_state.pending_exit(track_id)
+                if pending_exit and (now - pending_exit.pending_at).total_seconds() >= ROOM_PRESENCE_EXIT_CONFIRM_SECONDS:
+                    self._send_room_presence_exit_confirmation(
+                        track_id=track_id,
+                        exited_at=pending_exit.pending_at,
+                    )
 
             self.active_tracks.pop(track_id, None)
             self.last_sent_by_track.pop(track_id, None)
+            self.track_sides.pop(track_id, None)
+            self.last_crossing_by_track.pop(track_id, None)
+            self.room_presence_state.cancel_pending_exit(track_id)
+
+    @staticmethod
+    def _normalized_center(bbox: Dict) -> Tuple[float, float]:
+        fw = max(1.0, float(bbox.get("fw") or 1))
+        fh = max(1.0, float(bbox.get("fh") or 1))
+        cx = (float(bbox.get("x", 0)) + float(bbox.get("w", 0)) / 2) / fw
+        cy = (float(bbox.get("y", 0)) + float(bbox.get("h", 0)) / 2) / fh
+        return min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))
+
+    @staticmethod
+    def _line_side(rule: Dict, point: Tuple[float, float]) -> int:
+        x1 = float(rule.get("line_x1", 0.5))
+        y1 = float(rule.get("line_y1", 0.1))
+        x2 = float(rule.get("line_x2", 0.5))
+        y2 = float(rule.get("line_y2", 0.9))
+        px, py = point
+        cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+        if abs(cross) < CROSSING_SIDE_EPSILON:
+            return 0
+        return 1 if cross > 0 else -1
+
+    def _check_crossing(self, detection: Detection, now: datetime):
+        rule = self.crossing_rule
+        if not rule or not detection.track_id:
+            return
+
+        side = self._line_side(rule, self._normalized_center(detection.bbox))
+        if side == 0:
+            return
+
+        previous_side = self.track_sides.get(detection.track_id)
+        self.track_sides[detection.track_id] = side
+        if previous_side is None or previous_side == side:
+            return
+
+        last_crossing = self.last_crossing_by_track.get(detection.track_id)
+        if last_crossing and (now - last_crossing).total_seconds() < CROSSING_COOLDOWN_SECONDS:
+            return
+        self.last_crossing_by_track[detection.track_id] = now
+
+        crossing_direction = (
+            "negative_to_positive" if previous_side < side else "positive_to_negative"
+        )
+        direction = (
+            "entry"
+            if crossing_direction == rule.get("entry_direction", "negative_to_positive")
+            else "exit"
+        )
+        self._send_crossing_event(
+            detection=detection,
+            direction=direction,
+            crossing_direction=crossing_direction,
+            crossed_at=now,
+        )
+        if direction == "exit":
+            self.room_presence_state.mark_pending_exit(detection.track_id, detection, now)
+        else:
+            pending = self.room_presence_state.cancel_pending_exit(detection.track_id)
+            if pending:
+                self._send_room_presence_exit_cancel(detection.track_id)
 
     def _process_frame(self, frame: np.ndarray):
         """Bitta frame'ni qayta ishlash"""
         detections = self.model_manager.detect_people(frame)
         now = datetime.now()
         active_track_ids = self._assign_tracks(detections, now)
+        for pending in self.room_presence_state.active_tracks_to_cancel(active_track_ids, now):
+            self.room_presence_state.cancel_pending_exit(pending.track_id)
+            self._send_room_presence_exit_cancel(pending.track_id)
         self._expire_tracks(now, active_track_ids)
 
         if not detections:
@@ -628,6 +739,9 @@ class CameraStreamHandler:
         self.stats["persons_detected"] += len(detections)
 
         for det in detections:
+            if det.track_id:
+                self._check_crossing(det, now)
+
             if not det.track_id or not self._should_send_track(det.track_id, now):
                 continue
 
@@ -673,6 +787,74 @@ class CameraStreamHandler:
 
         except requests.RequestException as e:
             logger.warning(f"⚠️  Failed to send detection to API: {e}")
+
+
+    def _send_crossing_event(
+        self,
+        detection: Detection,
+        direction: str,
+        crossing_direction: str,
+        crossed_at: Optional[datetime] = None,
+        employee_id: Optional[str] = None,
+    ):
+        """Line crossing eventini API'ga yuborish."""
+        try:
+            payload = {
+                "camera_id": self.camera_id,
+                "employee_id": employee_id,
+                "track_id": detection.track_id or "unknown",
+                "direction": direction,
+                "crossing_direction": crossing_direction,
+                "confidence": min(1.0, max(0, detection.confidence)),
+                "bbox": detection.bbox,
+                "crossed_at": (crossed_at or datetime.now()).isoformat(),
+                "snapshot_path": None,
+            }
+            response = requests.post(
+                f"{API_BASE}/internal/camera-crossings",
+                json=payload,
+                timeout=API_TIMEOUT,
+            )
+            response.raise_for_status()
+            logger.info(
+                f"Crossing {direction}: {self.camera_name} "
+                f"track={payload['track_id']} dir={crossing_direction}"
+            )
+        except requests.RequestException as e:
+            logger.warning(f"Failed to send crossing to API: {e}")
+
+    def _send_room_presence_exit_confirmation(self, track_id: str, exited_at: datetime):
+        """Pending exit'ni room presence tarixida yakuniy chiqish qilib yopish."""
+        try:
+            response = requests.post(
+                f"{API_BASE}/internal/camera-room-presence/confirm-exit",
+                json={
+                    "camera_id": self.camera_id,
+                    "track_id": track_id,
+                    "exited_at": exited_at.isoformat(),
+                },
+                timeout=API_TIMEOUT,
+            )
+            response.raise_for_status()
+            logger.info(f"Room presence exit confirmed: {self.camera_name} track={track_id}")
+        except requests.RequestException as e:
+            logger.warning(f"Failed to confirm room presence exit: {e}")
+
+    def _send_room_presence_exit_cancel(self, track_id: str):
+        """Track hali ko'rinyapti yoki qaytdi: pending exit'ni bekor qilish."""
+        try:
+            response = requests.post(
+                f"{API_BASE}/internal/camera-room-presence/cancel-exit",
+                json={
+                    "camera_id": self.camera_id,
+                    "track_id": track_id,
+                },
+                timeout=API_TIMEOUT,
+            )
+            response.raise_for_status()
+            logger.info(f"Room presence exit cancelled: {self.camera_name} track={track_id}")
+        except requests.RequestException as e:
+            logger.warning(f"Failed to cancel room presence exit: {e}")
 
 
 # ============================================================================
@@ -733,6 +915,7 @@ class HumanRecognitionWorker:
                     rtsp_url=rtsp_url,
                     model_manager=self.model_manager,
                     matching_engine=self.matching_engine,
+                    crossing_rule=cam_data.get("crossing_rule"),
                 )
                 handler.start()
                 self.cameras[camera_id] = handler
@@ -744,6 +927,23 @@ class HumanRecognitionWorker:
             logger.error(f"❌ Failed to load cameras: {e}")
             self.status["errors"] += 1
 
+    def _refresh_camera_rules(self):
+        """API'dan crossing rule sozlamalarini yangilab turish."""
+        try:
+            response = requests.get(
+                f"{API_BASE}/internal/cameras/active",
+                timeout=API_TIMEOUT,
+            )
+            response.raise_for_status()
+            for cam_data in response.json().get("data", []):
+                handler = self.cameras.get(cam_data.get("id"))
+                if not handler:
+                    continue
+                rule = cam_data.get("crossing_rule")
+                handler.crossing_rule = rule if rule and rule.get("enabled") else None
+        except Exception as e:
+            logger.warning(f"Failed to refresh camera crossing rules: {e}")
+
     def _monitor(self):
         """Monitoring loop"""
         while not self.stop_event.is_set():
@@ -752,6 +952,7 @@ class HumanRecognitionWorker:
 
                 # Embeddinglarni davriy yangilash (yangi enroll qilingan xodimlar uchun)
                 self.matching_engine._refresh_embeddings()
+                self._refresh_camera_rules()
 
                 total_frames = sum(h.stats["frames_processed"] for h in self.cameras.values())
                 total_people = sum(h.stats["persons_detected"] for h in self.cameras.values())

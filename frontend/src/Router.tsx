@@ -11,6 +11,7 @@ import NotFoundPage from './pages/NotFounds/NotFoundPage';
 import DashboardLayout from './Layout/Layout';
 
 import AnimateWrapper from './components/AnimateWrapper';
+import TEST from './pages/marufaka';
 
 const LoginPage = lazy(() => import('./pages/Login/Login'));
 const Home = lazy(() => import('./pages/Home'));

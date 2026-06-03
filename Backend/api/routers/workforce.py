@@ -386,7 +386,7 @@ def create_employee(
 )
 def list_employees(
     page: int = Query(..., ge=1, description="Page number"),
-    limit: int = Query(..., ge=1, le=100, description="Items per page"),
+    limit: int = Query(..., ge=1, le=500, description="Items per page"),
     department_id: str | None = Query(None, description="Filter by department UUID"),
     is_active: bool | None = Query(None, description="Filter by activity status"),
     sort: str = Query("created_at", description="created_at or name"),
