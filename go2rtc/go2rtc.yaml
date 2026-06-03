@@ -1,8 +1,11 @@
 api:
   listen: ":1984"
 
+rtsp:
+  listen: ":8554"
+
 ffmpeg:
-  bin: "C:\\Users\\User\\Desktop\\OLDTIME\\go2rtc\\ffmpeg\\bin\\ffmpeg.exe"
+  bin: "C:\\Users\\User\\Desktop\\ffmpeg-8.1.1-full_build\\bin\\ffmpeg.exe"
 
 # Kameralar backend orqali dinamik ro'yxatdan o'tkaziladi.
 # Qo'lda qo'shish uchun:
@@ -10,7 +13,7 @@ ffmpeg:
 #   cam-UUID:
 #     - rtsp://admin:password@IP:554/Streaming/Channels/101
 streams:
-  cam-21473cd0-8920-4b95-8a7e-2cdfcacc7a67:
+  cam-38ee113a-0a91-40ee-a2d0-a79658dcf6d1:
     - ffmpeg:rtsp://admin:Z12345678r@192.168.30.52:554/Streaming/Channels/101#video=h264#hardware=cuda
-  cam-21473cd0-8920-4b95-8a7e-2cdfcacc7a67-audio-aac:
+  cam-38ee113a-0a91-40ee-a2d0-a79658dcf6d1-audio-aac:
     - ffmpeg:rtsp://admin:Z12345678r@192.168.30.52:554/Streaming/Channels/101#audio=aac

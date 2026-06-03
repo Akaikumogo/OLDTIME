@@ -19,7 +19,7 @@ import numpy as np
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
-from typing import Optional, Dict, List, Tuple
+from typing import Any, Optional, Dict, List, Tuple
 from dataclasses import dataclass
 from threading import Thread, Event
 import json
@@ -55,6 +55,9 @@ logging.basicConfig(
 
 # WorkPlus API sozlamalari (auth yo'q — localhost'da backend bilan birga ishlaydi)
 API_BASE = os.getenv("WORKPLUS_API_URL", "http://localhost:8001").rstrip("/")
+GO2RTC_RTSP_BASE = os.getenv("GO2RTC_RTSP_URL", "rtsp://localhost:8554")
+SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Backend", "face_captures")
+SNAPSHOT_WEB_PREFIX = "/static/face_captures"
 API_TIMEOUT = 15
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000")
 
@@ -66,12 +69,12 @@ if DEVICE == "cuda":
     logger.info(f"💾 VRAM limit: {VRAM_LIMIT_GB}GB")
 
 # Model sozlamalari (6GB VRAM uchun)
-YOLO_MODEL = os.getenv("WORKER_PERSON_MODEL", "yolov8n.pt")
+YOLO_MODEL = os.getenv("WORKER_PERSON_MODEL", "yolov8l.pt")
 POSE_MODEL = None  # Faolasini: yolov8n-pose.pt (agar kerak bo'lsa)
 FACE_DETECTION_THRESHOLD = 0.5
 PERSON_CLASS_ID = int(os.getenv("WORKER_PERSON_CLASS_ID", "0"))
 BODY_DETECTION_THRESHOLD = float(os.getenv("WORKER_PERSON_DETECTION_THRESHOLD", "0.50"))
-PERSON_IMGSZ = int(os.getenv("WORKER_PERSON_IMGSZ", "960"))
+PERSON_IMGSZ = int(os.getenv("WORKER_PERSON_IMGSZ", "2400"))
 BODY_SIZE_MIN = int(os.getenv("WORKER_PERSON_MIN_SIZE", "40"))
 BODY_MAX_DETECTIONS = int(os.getenv("WORKER_PERSON_MAX_DETECTIONS", "20"))
 TRACK_IOU_THRESHOLD = float(os.getenv("WORKER_TRACK_IOU_THRESHOLD", "0.2"))
@@ -79,6 +82,7 @@ TRACK_CENTER_DISTANCE = float(os.getenv("WORKER_TRACK_CENTER_DISTANCE", "160"))
 TRACK_STALE_SECONDS = float(os.getenv("WORKER_TRACK_STALE_SECONDS", "4"))
 DETECTION_SEND_INTERVAL_SECONDS = float(os.getenv("WORKER_DETECTION_SEND_INTERVAL_SECONDS", "1"))
 FRAME_SKIP = max(1, int(os.getenv("WORKER_FRAME_SKIP", "3" if DEVICE == "cpu" else "2")))
+YOLO_INTERVAL = int(os.getenv("WORKER_YOLO_INTERVAL", "3"))  # har N processed frameda bir YOLO
 CROSSING_COOLDOWN_SECONDS = float(os.getenv("WORKER_CROSSING_COOLDOWN_SECONDS", "3"))
 CROSSING_SIDE_EPSILON = float(os.getenv("WORKER_CROSSING_SIDE_EPSILON", "0.003"))
 ROOM_PRESENCE_EXIT_CONFIRM_SECONDS = float(os.getenv("WORKER_ROOM_PRESENCE_EXIT_CONFIRM_SECONDS", "4"))
@@ -271,6 +275,8 @@ class ModelManager:
                     if w < BODY_SIZE_MIN or h < BODY_SIZE_MIN:
                         continue
 
+                    body_crop = frame[max(0, y1):min(frame.shape[0], y2),
+                                     max(0, x1):min(frame.shape[1], x2)]
                     detections.append(
                         Detection(
                             detection_type="BODY",
@@ -283,6 +289,7 @@ class ModelManager:
                                 "fw": fw,
                                 "fh": fh,
                             },
+                            face_snapshot=body_crop,
                         )
                     )
 
@@ -462,10 +469,13 @@ class CameraStreamHandler:
         self.cap = None
         self.active_tracks: Dict[str, Track] = {}
         self.last_sent_by_track: Dict[str, datetime] = {}
+        self.track_snapshots: Dict[str, str] = {}
         self.track_sides: Dict[str, int] = {}
         self.last_crossing_by_track: Dict[str, datetime] = {}
         self.room_presence_state = RoomPresenceTrackState()
         self.next_track_id = 0
+        self.cv_trackers: Dict[str, Any] = {}   # track_id → OpenCV tracker
+        self.yolo_frame_count = 0               # processed frame counter
         self.stop_event = Event()
         self.thread = None
 
@@ -659,6 +669,8 @@ class CameraStreamHandler:
 
             self.active_tracks.pop(track_id, None)
             self.last_sent_by_track.pop(track_id, None)
+            self.track_snapshots.pop(track_id, None)
+            self.cv_trackers.pop(track_id, None)
             self.track_sides.pop(track_id, None)
             self.last_crossing_by_track.pop(track_id, None)
             self.room_presence_state.cancel_pending_exit(track_id)
@@ -723,35 +735,133 @@ class CameraStreamHandler:
             if pending:
                 self._send_room_presence_exit_cancel(detection.track_id)
 
-    def _process_frame(self, frame: np.ndarray):
-        """Bitta frame'ni qayta ishlash"""
-        detections = self.model_manager.detect_people(frame)
-        now = datetime.now()
-        active_track_ids = self._assign_tracks(detections, now)
-        for pending in self.room_presence_state.active_tracks_to_cancel(active_track_ids, now):
-            self.room_presence_state.cancel_pending_exit(pending.track_id)
-            self._send_room_presence_exit_cancel(pending.track_id)
-        self._expire_tracks(now, active_track_ids)
+    @staticmethod
+    def _make_cv_tracker():
+        """OpenCV versiyasiga qarab to'g'ri tracker yaratish."""
+        try:
+            return cv2.TrackerKCF_create()
+        except AttributeError:
+            return cv2.legacy.TrackerKCF_create()  # type: ignore[attr-defined]
 
+    def _reinit_tracker(self, track_id: str, frame: np.ndarray, bbox: Dict):
+        """Mavjud yoki yangi OpenCV tracker ni bbox bilan ishga tushirish."""
+        fh, fw = frame.shape[:2]
+        x = max(0, int(bbox.get("x", 0)))
+        y = max(0, int(bbox.get("y", 0)))
+        w = max(1, min(int(bbox.get("w", 10)), fw - x))
+        h = max(1, min(int(bbox.get("h", 10)), fh - y))
+        try:
+            tracker = self._make_cv_tracker()
+            if tracker.init(frame, (x, y, w, h)):
+                self.cv_trackers[track_id] = tracker
+        except Exception:
+            self.cv_trackers.pop(track_id, None)
+
+    def _run_cv_trackers(self, frame: np.ndarray, now: datetime):
+        """YOLO o'rniga OpenCV trackerlardan detection list yasash."""
+        detections: List[Detection] = []
+        active_track_ids: set = set()
+        fh, fw = frame.shape[:2]
+
+        for track_id in list(self.cv_trackers):
+            tracker = self.cv_trackers[track_id]
+            ok, rect = tracker.update(frame)
+            if not ok:
+                self.cv_trackers.pop(track_id, None)
+                continue
+
+            x, y, w, h = max(0, int(rect[0])), max(0, int(rect[1])), int(rect[2]), int(rect[3])
+            w = min(w, fw - x)
+            h = min(h, fh - y)
+            if w <= 2 or h <= 2:
+                self.cv_trackers.pop(track_id, None)
+                continue
+
+            track = self.active_tracks.get(track_id)
+            if not track:
+                self.cv_trackers.pop(track_id, None)
+                continue
+
+            crop = frame[y: y + h, x: x + w]
+            prev_conf = track.detections[-1].confidence if track.detections else 0.5
+            det = Detection(
+                detection_type="BODY",
+                confidence=prev_conf,
+                bbox={"x": x, "y": y, "w": w, "h": h, "fw": fw, "fh": fh},
+                face_snapshot=crop if crop.size > 0 else None,
+                track_id=track_id,
+            )
+            track.detections.append(det)
+            track.last_seen = now
+            active_track_ids.add(track_id)
+            detections.append(det)
+
+        return detections, active_track_ids
+
+    def _emit_detections(self, detections: List[Detection], now: datetime):
+        """Crossing check + API ga yuborish (YOLO va tracker framelar uchun umumiy)."""
         if not detections:
             return
-
         self.stats["persons_detected"] += len(detections)
-
         for det in detections:
             if det.track_id:
                 self._check_crossing(det, now)
-
             if not det.track_id or not self._should_send_track(det.track_id, now):
                 continue
-
             self.stats["unknowns_detected"] += 1
-            self._send_detection(
-                None,
-                det,
-                confidence=det.confidence,
-                seen_at=now,
-            )
+            self._send_detection(None, det, confidence=det.confidence, seen_at=now)
+
+    def _process_frame(self, frame: np.ndarray):
+        """YOLO + OpenCV tracker kombinatsiyasi."""
+        self.yolo_frame_count += 1
+        now = datetime.now()
+
+        run_yolo = (self.yolo_frame_count % YOLO_INTERVAL == 1) or (not self.active_tracks)
+
+        if run_yolo:
+            # --- YOLO detection (GPU) ---
+            detections = self.model_manager.detect_people(frame)
+            active_track_ids = self._assign_tracks(detections, now)
+
+            # Yangi/yangilangan tracklarni reinit qilish
+            for track_id in active_track_ids:
+                track = self.active_tracks.get(track_id)
+                if track and track.detections:
+                    self._reinit_tracker(track_id, frame, track.detections[-1].bbox)
+
+            # Yo'qolgan trackerlarni tozalash
+            for tid in list(self.cv_trackers):
+                if tid not in active_track_ids:
+                    self.cv_trackers.pop(tid, None)
+        else:
+            # --- OpenCV tracker (CPU, tez) ---
+            detections, active_track_ids = self._run_cv_trackers(frame, now)
+
+        # Umumiy: room presence, expire, send
+        for pending in self.room_presence_state.active_tracks_to_cancel(active_track_ids, now):
+            self.room_presence_state.cancel_pending_exit(pending.track_id)
+            self._send_room_presence_exit_cancel(pending.track_id)
+
+        self._expire_tracks(now, active_track_ids)
+        self._emit_detections(detections, now)
+
+    def _save_snapshot(self, track_id: str, img: np.ndarray) -> Optional[str]:
+        """Snapshot ni disk ga saqlash, web path qaytarish (faqat birinchi marta)."""
+        if track_id in self.track_snapshots:
+            return self.track_snapshots[track_id]
+        try:
+            os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            safe_cam = self.camera_id.replace("-", "")[:12]
+            filename = f"worker_{safe_cam}_{track_id}_{ts}.jpg"
+            filepath = os.path.join(SNAPSHOT_DIR, filename)
+            cv2.imwrite(filepath, img)
+            web_path = f"{SNAPSHOT_WEB_PREFIX}/{filename}"
+            self.track_snapshots[track_id] = web_path
+            return web_path
+        except Exception as e:
+            logger.debug(f"Snapshot save error: {e}")
+            return None
 
     def _send_detection(
         self,
@@ -764,16 +874,23 @@ class CameraStreamHandler:
     ):
         """Detection eventini API'ga yuborish"""
         try:
+            track_id = unknown_cluster_id or employee_id or detection.track_id or "unknown"
             event_confidence = detection.confidence if confidence is None else confidence
+
+            # Snapshot: faqat birinchi marta, disappeared bo'lsa saqlamaymiz
+            snapshot_path: Optional[str] = None
+            if not disappeared_at and detection.face_snapshot is not None and track_id:
+                snapshot_path = self._save_snapshot(track_id, detection.face_snapshot)
+
             payload = {
                 "camera_id": self.camera_id,
                 "employee_id": employee_id,
-                "track_id": unknown_cluster_id or employee_id or detection.track_id or "unknown",
+                "track_id": track_id,
                 "detection_type": detection.detection_type,
                 "confidence": min(1.0, max(0, event_confidence)),
                 "bbox": detection.bbox,
                 "seen_at": (seen_at or datetime.now()).isoformat(),
-                "snapshot_path": None,  # TODO: implement
+                "snapshot_path": snapshot_path,
             }
             if disappeared_at:
                 payload["disappeared_at"] = disappeared_at.isoformat()
@@ -876,10 +993,27 @@ class HumanRecognitionWorker:
             "errors": 0,
         }
 
+    def _cleanup_stale_tracks(self):
+        """Worker start bo'lganda DB dagi eski "live" tracklarni tozalash."""
+        try:
+            token = os.getenv("AI_CAMERA_AGENT_TOKEN", "")
+            response = requests.post(
+                f"{API_BASE}/internal/expire-stale-tracks?stale_seconds=120",
+                headers={"X-Camera-Agent-Token": token},
+                timeout=API_TIMEOUT,
+            )
+            response.raise_for_status()
+            logger.info(f"🧹 Stale tracks expired: {response.json().get('message')}")
+        except Exception as e:
+            logger.warning(f"⚠️  Stale track cleanup failed: {e}")
+
     def start(self):
         """Worker'ni ishga tushirish"""
         logger.info("🚀 HumanRecognition Worker starting...")
         self.status["started_at"] = datetime.now()
+
+        # Eski "live" tracklarni tozalash
+        self._cleanup_stale_tracks()
 
         # Kameralarni API'dan yuklash
         self._load_cameras()
@@ -903,11 +1037,7 @@ class HumanRecognitionWorker:
             for cam_data in cameras_list:
                 camera_id = cam_data["id"]
                 camera_name = cam_data["name"]
-                rtsp_url = cam_data.get("rtsp_main_url")
-
-                if not rtsp_url:
-                    logger.warning(f"⚠️  Camera {camera_name} has no RTSP URL")
-                    continue
+                rtsp_url = f"{GO2RTC_RTSP_BASE}/cam-{camera_id}"
 
                 handler = CameraStreamHandler(
                     camera_id=camera_id,

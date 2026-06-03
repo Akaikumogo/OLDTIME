@@ -33,6 +33,7 @@ const backendRoutes = [
   '/zones',
   '/rooms',
   '/cameras',
+  '/unknown-detections',
   '/internal',
   '/static'
 ];

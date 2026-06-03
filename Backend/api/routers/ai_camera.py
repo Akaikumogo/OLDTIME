@@ -58,6 +58,8 @@ from services.ai_camera_service import (
     fetch_camera,
     fetch_room,
     get_camera_crossing_rule,
+    crossing_rule_select,
+    serialize_crossing_rule,
     cancel_room_presence_pending_exit,
     confirm_room_presence_exit,
     inject_rtsp_credentials,
@@ -977,6 +979,32 @@ def list_employee_location_states(
 
 
 @router.post(
+    "/internal/expire-stale-tracks",
+    response_model=MessageResponse,
+    summary="Expire active detection tracks not seen recently (called on worker startup)",
+)
+def expire_stale_tracks(
+    stale_seconds: int = 300,
+    _token=Depends(_require_camera_agent_token),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE camera_detection_events
+                SET disappeared_at = seen_at,
+                    duration_seconds = 0
+                WHERE disappeared_at IS NULL
+                  AND seen_at < NOW() - (%s * INTERVAL '1 second')
+                """,
+                (stale_seconds,),
+            )
+            count = cur.rowcount
+        conn.commit()
+    return {"message": f"Expired {count} stale active tracks"}
+
+
+@router.post(
     "/internal/camera-detections",
     response_model=MessageResponse,
     summary="Store AI worker camera detection event",
@@ -992,6 +1020,18 @@ async def create_camera_detection(
     if live_location:
         await location_connections.broadcast(location_event_payload(live_location))
     return {"message": f"camera detection stored: {event_id}"}
+
+
+@router.get(
+    "/cameras/crossing-rules",
+    summary="List all camera crossing rules",
+)
+def list_all_crossing_rules(user=Depends(require_role(["admin", "hr"]))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(crossing_rule_select() + " ORDER BY created_at ASC")
+            rows = cur.fetchall()
+    return {"data": [serialize_crossing_rule(row) for row in rows]}
 
 
 @router.get(

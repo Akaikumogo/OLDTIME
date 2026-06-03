@@ -164,7 +164,7 @@ class CameraResponse(BaseModel):
     ip: str
     username: str
     password_configured: bool
-    rtsp_main_url: str
+    rtsp_main_url: Optional[str]
     rtsp_sub_url: Optional[str]
     isapi_base_url: Optional[str]
     zone_id: str

@@ -1381,6 +1381,11 @@ class ApiService {
     return data;
   }
 
+  async listAllCrossingRules() {
+    const { data } = await this.api.get<{ data: CameraCrossingRule[] }>('/cameras/crossing-rules');
+    return data.data;
+  }
+
   async getCameraCrossingRule(cameraId: string) {
     const { data } = await this.api.get<{
       message: string;

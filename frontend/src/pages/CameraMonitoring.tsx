@@ -30,6 +30,7 @@ import { useQuery } from '@tanstack/react-query';
 import apiService, {
   BACKEND_ORIGIN,
   type Camera as CameraType,
+  type CameraCrossingRule,
   type LiveMatchedDetection,
   type LiveUnknownDetection,
   type Zone
@@ -121,10 +122,25 @@ export default function CameraMonitoring() {
     queryFn: () => apiService.listRooms()
   });
 
+  const crossingRulesQuery = useQuery({
+    queryKey: ['camera-crossing-rules-all'],
+    queryFn: () => apiService.listAllCrossingRules(),
+    staleTime: 60_000,
+    refetchInterval: 60_000
+  });
+
   const cameras: CameraType[] = camerasQuery.data?.data ?? [];
   const cameraById = useMemo(() => {
     return new Map(cameras.map((cameraItem) => [cameraItem.id, cameraItem]));
   }, [cameras]);
+
+  const crossingRuleByCamera = useMemo(() => {
+    const map = new Map<string, CameraCrossingRule>();
+    for (const rule of crossingRulesQuery.data ?? []) {
+      map.set(rule.camera_id, rule);
+    }
+    return map;
+  }, [crossingRulesQuery.data]);
 
   const unknownByCamera = useMemo(() => {
     const map = new Map<string, LiveUnknownDetection[]>();
@@ -382,6 +398,7 @@ export default function CameraMonitoring() {
                     key={cameraItem.id}
                     camera={cameraItem}
                     profile={streamProfile}
+                    crossingRule={crossingRuleByCamera.get(cameraItem.id) ?? null}
                     unknownDetection={unknownByCamera.get(cameraItem.id)?.[0] ?? null}
                     unknownDetections={unknownByCamera.get(cameraItem.id) ?? []}
                     unknownCount={unknownByCamera.get(cameraItem.id)?.length ?? 0}
@@ -483,6 +500,7 @@ export default function CameraMonitoring() {
               camera={selectedCamera}
               profile={streamProfile}
               expanded
+              crossingRule={crossingRuleByCamera.get(selectedCamera.id) ?? null}
               unknownDetection={unknownByCamera.get(selectedCamera.id)?.[0] ?? null}
               unknownDetections={unknownByCamera.get(selectedCamera.id) ?? []}
               unknownCount={unknownByCamera.get(selectedCamera.id)?.length ?? 0}

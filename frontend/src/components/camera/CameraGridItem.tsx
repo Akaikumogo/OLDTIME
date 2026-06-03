@@ -12,6 +12,7 @@ import { Tooltip } from 'antd';
 import {
   BACKEND_ORIGIN,
   type Camera,
+  type CameraCrossingRule,
   type CameraMini,
   type DetectionBbox,
   type LiveMatchedDetection,
@@ -22,6 +23,24 @@ import { formatDateTime } from '@/utils/date';
 
 type CameraLike = Camera | CameraMini;
 type StreamProfile = 'main' | 'sub';
+
+function crossingArrow(rule: CameraCrossingRule) {
+  const dx = rule.line_x2 - rule.line_x1;
+  const dy = rule.line_y2 - rule.line_y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const mx = (rule.line_x1 + rule.line_x2) / 2;
+  const my = (rule.line_y1 + rule.line_y2) / 2;
+  const d = 0.09;
+  const pos = rule.entry_direction === 'negative_to_positive';
+  return {
+    x1: mx + (pos ? -nx : nx) * d,
+    y1: my + (pos ? -ny : ny) * d,
+    x2: mx + (pos ? nx : -nx) * d,
+    y2: my + (pos ? ny : -ny) * d,
+  };
+}
 
 function tokenizedUrl(path: string, profile: StreamProfile) {
   const token =
@@ -101,6 +120,7 @@ function drawBoxes(canvas: HTMLCanvasElement, items: BboxDrawItem[]) {
 
 type Props = {
   camera: CameraLike;
+  crossingRule?: CameraCrossingRule | null;
   unknownDetections?: LiveUnknownDetection[];
   unknownDetection?: LiveUnknownDetection | null;
   unknownCount?: number;
@@ -115,6 +135,7 @@ type Props = {
 
 export function CameraGridItem({
   camera,
+  crossingRule = null,
   unknownDetections = [],
   unknownDetection,
   unknownCount = 0,
@@ -264,6 +285,36 @@ export function CameraGridItem({
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}
+
+        {crossingRule?.enabled ? (() => {
+          const arr = crossingArrow(crossingRule);
+          const markerId = `cr-arrow-${camera.id}`;
+          return (
+            <svg
+              className="pointer-events-none absolute inset-0 h-full w-full"
+              viewBox="0 0 100 56.25"
+              preserveAspectRatio="none"
+            >
+              <defs>
+                <marker id={markerId} markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
+                  <path d="M0,0 L4,2 L0,4 Z" fill="#22c55e" />
+                </marker>
+              </defs>
+              <line
+                x1={crossingRule.line_x1 * 100} y1={crossingRule.line_y1 * 56.25}
+                x2={crossingRule.line_x2 * 100} y2={crossingRule.line_y2 * 56.25}
+                stroke="#f97316" strokeWidth="1.2" vectorEffect="non-scaling-stroke"
+                strokeDasharray="4 2"
+              />
+              <line
+                x1={arr.x1 * 100} y1={arr.y1 * 56.25}
+                x2={arr.x2 * 100} y2={arr.y2 * 56.25}
+                stroke="#22c55e" strokeWidth="1" vectorEffect="non-scaling-stroke"
+                markerEnd={`url(#${markerId})`}
+              />
+            </svg>
+          );
+        })() : null}
 
         <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent p-2">
           <div className="min-w-0">

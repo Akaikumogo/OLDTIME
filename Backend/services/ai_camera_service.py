@@ -695,19 +695,20 @@ def record_detection_event(cur, data):
     cur.execute(
         """
         INSERT INTO camera_detection_events (
-            camera_id,
-            employee_id,
-            track_id,
-            detection_type,
-            confidence,
-            bbox,
-            zone_id,
-            seen_at,
-            disappeared_at,
-            duration_seconds,
-            snapshot_path
+            camera_id, employee_id, track_id, detection_type,
+            confidence, bbox, zone_id,
+            seen_at, disappeared_at, duration_seconds, snapshot_path
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (camera_id, track_id) WHERE disappeared_at IS NULL
+        DO UPDATE SET
+            seen_at          = EXCLUDED.seen_at,
+            confidence       = EXCLUDED.confidence,
+            bbox             = EXCLUDED.bbox,
+            disappeared_at   = EXCLUDED.disappeared_at,
+            duration_seconds = EXCLUDED.duration_seconds,
+            snapshot_path    = COALESCE(EXCLUDED.snapshot_path,
+                                        camera_detection_events.snapshot_path)
         RETURNING id
         """,
         (
